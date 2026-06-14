@@ -1,0 +1,90 @@
+# Monitor Middleware Specification
+# uni-dev — Agent Automation System
+# Milestone: M9-monitoring
+# Version: 0.1.0
+
+spec:
+  name: monitor-middleware
+  milestone: M9-monitoring
+  repo: uni-dev
+  description: >
+    AgentMiddleware that intercepts all tool calls and records structured
+    TaskRun records for sub-agent task() delegation. Provides three output
+    channels: langgraph state persistence, SQLite multi-session storage,
+    structured logging, and custom stream events.
+
+data_model:
+  TaskRun:
+    fields:
+      run_id: { type: str, description: "UUID4 unique identifier" }
+      subagent_type: { type: str, description: "Sub-agent name (domain-designer, spec-writer, ...)" }
+      description: { type: str | None, description: "Task description text sent to sub-agent" }
+      parent_agent: { type: str, description: "Name of the calling agent" }
+      started_at: { type: float, description: "time.time() when task was dispatched" }
+      completed_at: { type: float | None, description: "time.time() when task completed (None if still running)" }
+      duration_ms: { type: int | None, description: "Elapsed wall-clock milliseconds" }
+      status: { type: str, description: "running | success | error" }
+      error: { type: str | None, description: "Exception message if failed" }
+      result_length: { type: int | None, description: "Number of characters in ToolMessage content" }
+
+  MonitorState (extends AgentState):
+    fields:
+      task_runs: { type: "NotRequired[list[dict[str, Any]]]", description: "Append-only list of TaskRun records, accumulated via custom reducer" }
+
+middleware:
+  class: MonitorMiddleware
+  extends: AgentMiddleware[MonitorState, ContextT, ResponseT]
+  hooks:
+    before_agent:
+      purpose: Capture runtime.stream_writer reference for stream events
+      behavior: Store runtime.stream_writer on self for use in wrap_tool_call
+
+    wrap_tool_call:
+      purpose: Intercept all tool calls, record TaskRun for task() tool
+      behavior:
+        - Log tool name and filtered args at DEBUG level
+        - If tool is "task":
+            - Create TaskRun with status="running", started_at=now()
+            - Emit stream event ("task_start", TaskRun)
+            - Log at INFO: "Task {subagent_type}#{run_id}: dispatching"
+            - Call handler() to execute the sub-agent
+            - Update TaskRun with completed_at, duration_ms, status, result_length
+            - If handler raised: status="error", error=str(exc)
+            - Append TaskRun to state.task_runs
+            - Write TaskRun to SQLite store
+            - Emit stream event ("task_end", TaskRun)
+            - Log at INFO: "Task {subagent_type}#{run_id}: {status} in {duration_ms}ms"
+        - If tool is not "task":
+            - Log at DEBUG: "Tool {name} called"
+            - Call handler() normally
+
+    after_agent:
+      purpose: Flush remaining runs, emit session summary
+      behavior:
+        - Log session summary: total tasks, success count, error count
+        - Emit stream event ("session_end", {total, success, error})
+
+sqlite_store:
+  class: MonitorStore
+  file: .uni-dev/monitor.db
+  table: task_runs
+  schema:
+    run_id: TEXT PRIMARY KEY
+    subagent_type: TEXT NOT NULL
+    description: TEXT
+    parent_agent: TEXT NOT NULL DEFAULT 'orchestrator'
+    started_at: REAL NOT NULL
+    completed_at: REAL
+    duration_ms: INTEGER
+    status: TEXT NOT NULL DEFAULT 'running'
+    error: TEXT
+    result_length: INTEGER
+  indexes:
+    - idx_task_runs_subagent ON task_runs(subagent_type)
+    - idx_task_runs_status ON task_runs(status)
+    - idx_task_runs_started ON task_runs(started_at)
+
+integration:
+  orchestrator:
+    param: monitor_db_path: str | None = ".uni-dev/monitor.db"
+    behavior: If path is provided, prepend MonitorMiddleware to the middleware list

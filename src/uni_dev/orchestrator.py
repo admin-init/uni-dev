@@ -22,6 +22,7 @@ from uni_dev.agents.reviewer import create_reviewer
 from uni_dev.agents.spec_writer import create_spec_writer
 from uni_dev.agents.test_generator import create_test_generator
 from uni_dev.core.graph import build_graph
+from uni_dev.monitoring import MonitorMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ def create_orchestrator(
     config_path: Path | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    monitor_db_path: str | None = ".uni-dev/monitor.db",
 ) -> CompiledStateGraph:
     """Create the main uni-dev orchestrator agent.
 
@@ -243,6 +245,8 @@ def create_orchestrator(
         config_path: Path to config YAML. Defaults to config/default.yaml.
         api_key: DeepSeek API key. Defaults to DEEPSEEK_API_KEY env var.
         base_url: API base URL. Defaults to https://api.deepseek.com.
+        monitor_db_path: Path for SQLite monitor store. Defaults to
+            .uni-dev/monitor.db. Pass None to disable monitoring.
 
     Returns:
         Compiled deep agent StateGraph.
@@ -274,9 +278,14 @@ def create_orchestrator(
     )
     skills = [str(skills_path)] if skills_path.exists() else []
 
+    middleware = []
+    if monitor_db_path is not None:
+        middleware.append(MonitorMiddleware(db_path=monitor_db_path))
+
     return create_deep_agent(
         model=orchestrator_model,
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
         subagents=sub_agents,
+        middleware=middleware if middleware else (),
         skills=skills,
     )
