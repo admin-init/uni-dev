@@ -22,7 +22,7 @@ dependencies = [
     "uvloop>=0.22.0",
     "pyyaml>=6.0",
     "textual>=8.0",
-    "textual-web>=0.5",
+    "textual-web>=0.2,<0.5",
 ]
 
 [project.optional-dependencies]
