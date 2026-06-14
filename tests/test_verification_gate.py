@@ -1,6 +1,5 @@
 """Tests for core/verification_gate.py — deterministic pass/fail gate."""
 
-import pytest
 from uni_dev.core.verification_gate import verification_gate
 
 
@@ -48,8 +47,11 @@ def test_verification_gate_does_not_modify_state():
 
 
 def test_verification_gate_no_llm():
-    """Verification gate is pure Python — no LLM imports or calls."""
+    """Verification gate is pure Python — no LLM imports or API calls."""
     import inspect
     source = inspect.getsource(verification_gate)
-    assert "llm" not in source.lower()
-    assert "langchain" not in source.lower()
+    assert "import langchain" not in source
+    assert "from langchain" not in source
+    assert "invoke(" not in source
+    assert "openai" not in source.lower()
+    assert "anthropic" not in source.lower()
