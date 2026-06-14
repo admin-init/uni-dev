@@ -1,0 +1,77 @@
+# Security Filter Specification
+# uni-dev — Agent Automation System
+# Milestone: M7-security
+# Version: 0.1.0
+
+spec:
+  name: security-filter
+  milestone: M7-security
+  repo: uni-dev
+  description: >
+    Middleware that intercepts tool call arguments and results to redact
+    sensitive information (PII, secrets, credentials) before it reaches
+    logs, intermediate sub-agent outputs, or the knowledge base.
+
+patterns:
+  - name: bearer_token
+    regex: 'Bearer\s+[A-Za-z0-9\-._~+/=]+'
+    replacement: 'Bearer <REDACTED>'
+    description: JWT and OAuth bearer tokens in Authorization headers.
+
+  - name: api_key_param
+    regex: 'api[_-]?key[=:]\s*[^\s&]+'
+    replacement: 'api_key=<REDACTED>'
+    description: API keys in query params or headers (api_key=..., api-key: ...)
+
+  - name: password
+    regex: 'password[=:]\s*[^\s&]+'
+    replacement: 'password=<REDACTED>'
+    description: Passwords in query strings or config.
+
+  - name: email
+    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+    replacement: '<EMAIL>'
+    description: Email addresses in any context.
+
+  - name: postgres_url
+    regex: 'postgresql://[^@\s]+@'
+    replacement: 'postgresql://<CREDENTIALS>@'
+    description: PostgreSQL connection strings with embedded credentials.
+
+  - name: mongodb_url
+    regex: 'mongodb://[^@\s]+@'
+    replacement: 'mongodb://<CREDENTIALS>@'
+    description: MongoDB connection strings with embedded credentials.
+
+  - name: redis_url
+    regex: 'REDIS_URL[=:]\s*[^\s]+'
+    replacement: 'REDIS_URL=<REDACTED>'
+    description: Redis connection URL in config or env.
+
+apply_points:
+  - log_output: All log messages emitted by agents.
+  - sub_agent_output: Intermediate text returned by sub-agents.
+  - kb_insert: Text ingested into the knowledge base (ChromaDB, SQLite).
+  - tool_args: Arguments passed to tools (filesystem, shell, MCP).
+  - tool_results: Results returned by tools.
+
+interface:
+  class: LogFilter
+  methods:
+    - filter_text(text: str) -> str
+    - filter_dict(data: dict) -> dict
+
+behavior:
+  - Filters single text strings via regex substitution.
+  - Recursively filters all string values in nested dicts/lists.
+  - Returns unmodified non-string, non-dict, non-list values.
+  - Case-insensitive matching where appropriate.
+  - Zero false positives on legitimate code content (IDs, UUIDs, base64).
+
+integration:
+  deepagent_middleware:
+    type: AgentMiddleware
+    hook: before_agent_step or tool_call wrapper
+    description: >
+      Wraps tool call execution so all args are filtered on entry
+      and all results are filtered on exit before logging or KB storage.
