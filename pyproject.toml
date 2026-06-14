@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 license = {text = "MIT"}
 readme = "README.md"
 dependencies = [
-    "uni-kb",
+    "uni-kb @ git+https://github.com/admin-init/uni-kb@main",
     "deepagents>=0.5.3",
     "langgraph>=0.2.0",
     "langchain>=0.3.0",
