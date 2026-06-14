@@ -1,0 +1,167 @@
+# Deterministic Core Specification
+# uni-dev — Agent Automation System
+# Milestone: M5-deterministic-core
+# Version: 0.1.0
+
+spec:
+  name: deterministic-core
+  milestone: M5-deterministic-core
+  repo: uni-dev
+  description: >
+    Four immutable LangGraph nodes forming the non-overridable backbone
+    of the uni-dev pipeline. Pure Python, zero LLM calls, ~50 LOC total
+    across all 4 nodes. These nodes handle verification, retry, migration
+    stepping, and classification routing.
+
+state_schema:
+  name: UniDevState
+  type: TypedDict
+  fields:
+    messages:
+      type: "list[BaseMessage]"
+      description: Conversation history from the orchestrator.
+    classification:
+      type: str
+      description: "Issue classification — add_feature | update_api | remove_feature | refactor"
+    attempt_count:
+      type: int
+      default: 0
+      description: Number of retry attempts, incremented by retry controller.
+    test_results:
+      type: dict
+      description: "Aggregated test output — {pass: bool, failures: list[str], output: str}"
+    migration_idx:
+      type: int
+      default: 0
+      description: Current position in the migration plan array.
+    migration_plan:
+      type: "list[str]"
+      description: Ordered list of modules to migrate.
+    current_phase:
+      type: str
+      description: "Pipeline phase — ddd | sdd | tdd | verify | done"
+    kb_path:
+      type: str
+      description: Path to the project's .uni-dev/ knowledge base directory.
+
+components:
+
+  verification_gate:
+    file: core/verification_gate.py
+    loc_target: ~16
+    description: >
+      Reads test_results from state. If test_results.pass is True and
+      no failures exist, returns "pass". Otherwise returns "fail".
+      LLM cannot override. This is a deterministic pass/fail gate.
+    input:
+      - test_results:
+          pass: bool
+          failures: "list[str]"
+          output: str
+    output:
+      status: "pass | fail"
+    behavior:
+      - "Returns {'status': 'pass'} when test_results['pass'] is True"
+      - "Returns {'status': 'fail'} when test_results['pass'] is False"
+      - "Returns {'status': 'fail'} when failures list is non-empty"
+      - "Handles missing test_results key by returning fail"
+    invariants:
+      - "Never calls any LLM"
+      - "Never modifies state beyond status field"
+
+  retry_controller:
+    file: core/retry_controller.py
+    loc_target: ~10
+    description: >
+      Checks attempt_count against the fixed limit of 3.
+      Returns "retry" to loop back to code generation,
+      or "escalate_to_human" when attempts are exhausted.
+    input:
+      - attempt_count: int
+    output:
+      status: "retry | escalate_to_human"
+      attempt_count: int
+    behavior:
+      - "Increments attempt_count by 1"
+      - "Returns {'status': 'retry', 'attempt_count': N+1} when N < 3"
+      - "Returns {'status': 'escalate_to_human', 'attempt_count': N+1} when N >= 3"
+    invariants:
+      - "Never calls any LLM"
+      - "Fixed limit of 3 — no configurable argument"
+      - "Cannot be overridden by LLM"
+
+  migration_stepper:
+    file: core/migration_stepper.py
+    loc_target: ~11
+    description: >
+      Advances migration_idx by 1. Returns "next" to continue to the
+      next module, or "done" when all modules have been processed.
+      LLM cannot skip or reorder steps.
+    input:
+      - migration_idx: int
+      - migration_plan: "list[str]"
+    output:
+      status: "next | done"
+      migration_idx: int
+    behavior:
+      - "Increments migration_idx by 1"
+      - "Returns {'status': 'done', 'migration_idx': N+1} when N+1 >= len(plan)"
+      - "Returns {'status': 'next', 'migration_idx': N+1} when N+1 < len(plan)"
+      - "Handles empty migration_plan by returning done immediately"
+    invariants:
+      - "Never calls any LLM"
+      - "Sequential only — no skipping or reordering"
+      - "Index never exceeds plan length"
+
+  classification_router:
+    file: core/classification_router.py
+    loc_target: ~13
+    description: >
+      Maps the issue classification string to the next pipeline step
+      using an immutable routing table. The LLM classifies; the code
+      routes. No dynamic dispatch.
+    input:
+      - classification: str
+    output:
+      next_node: str
+    routing_table:
+      add_feature: DomainDesigner
+      update_api: SpecWriter
+      remove_feature: DomainDesigner
+      refactor: DomainDesigner
+      default: DomainDesigner
+    behavior:
+      - "Looks up classification in immutable routing table"
+      - "Returns {'next_node': '<target>'} for known classifications"
+      - "Returns {'next_node': 'DomainDesigner'} for unknown classifications"
+    invariants:
+      - "Never calls any LLM"
+      - "Routing table is immutable — no dynamic dispatch"
+      - "Default fallback always routes to DomainDesigner"
+
+  graph:
+    file: core/graph.py
+    loc_target: ~50
+    description: >
+      Compiles a LangGraph StateGraph wiring all 4 deterministic nodes
+      with conditional edges. Defines the UniDevState TypedDict and
+      exposes a compiled graph runnable for use as a CompiledSubAgent.
+    nodes:
+      - classification_router
+      - verification_gate
+      - retry_controller
+      - migration_stepper
+    edges:
+      - "START -> classification_router"
+      - "classification_router -> DomainDesigner (conditional)"
+      - "DomainDesigner -> SpecWriter"
+      - "SpecWriter -> TestGenerator (conditional on classification)"
+      - "TestGenerator -> CodeGenerator"
+      - "CodeGenerator -> verification_gate"
+      - "verification_gate -> Reviewer (pass)"
+      - "verification_gate -> retry_controller (fail)"
+      - "retry_controller -> CodeGenerator (retry)"
+      - "retry_controller -> END (escalate)"
+      - "Reviewer -> END"
+    output:
+      compiled_graph: "CompiledStateGraph"
