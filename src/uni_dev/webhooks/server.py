@@ -70,6 +70,18 @@ def create_app() -> FastAPI:
             )
 
         result = handle_github_event(payload)
+        if result.get("status") == "accepted":
+            issue_data = result.get("issue", {})
+            from uni_dev.store.issue_store import IssueStore
+            store = IssueStore(".uni-kb/issues.db")
+            issue_id = store.insert_issue({
+                "title": issue_data.get("title", ""),
+                "body": issue_data.get("body", ""),
+                "repo": issue_data.get("repo", ""),
+                "sender": issue_data.get("sender", ""),
+                "source": "github",
+            })
+            result["issue_id"] = issue_id
         logger.info(
             "GitHub webhook: %s %s — %s",
             result.get("event_type", "?"),
@@ -102,6 +114,18 @@ def create_app() -> FastAPI:
             )
 
         result = handle_codeberg_event(payload)
+        if result.get("status") == "accepted":
+            issue_data = result.get("issue", {})
+            from uni_dev.store.issue_store import IssueStore
+            store = IssueStore(".uni-kb/issues.db")
+            issue_id = store.insert_issue({
+                "title": issue_data.get("title", ""),
+                "body": issue_data.get("body", ""),
+                "repo": issue_data.get("repo", ""),
+                "sender": issue_data.get("sender", ""),
+                "source": "codeberg",
+            })
+            result["issue_id"] = issue_id
         logger.info(
             "Codeberg webhook: %s — %s",
             result.get("issue", {}).get("title", "?"),

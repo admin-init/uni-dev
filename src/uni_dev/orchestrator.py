@@ -234,7 +234,7 @@ def create_orchestrator(
     config_path: Path | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
-    monitor_db_path: str | None = ".uni-dev/monitor.db",
+    monitor_db_path: str | None = ".uni-kb/monitor.db",
 ) -> CompiledStateGraph:
     """Create the main uni-dev orchestrator agent.
 
@@ -246,7 +246,7 @@ def create_orchestrator(
         api_key: DeepSeek API key. Defaults to DEEPSEEK_API_KEY env var.
         base_url: API base URL. Defaults to https://api.deepseek.com.
         monitor_db_path: Path for SQLite monitor store. Defaults to
-            .uni-dev/monitor.db. Pass None to disable monitoring.
+            .uni-kb/monitor.db. Pass None to disable monitoring.
 
     Returns:
         Compiled deep agent StateGraph.
