@@ -1,0 +1,124 @@
+# Continuous Runner + TUI Specification
+# uni-dev — Agent Automation System
+# Milestone: M10-continuous-runner
+# Version: 0.1.0
+
+spec:
+  name: continuous-runner
+  milestone: M10-continuous-runner
+  repo: uni-dev
+  description: >
+    Long-running pipeline runner with Textual TUI dashboard,
+    SQLite issue lifecycle tracking, webhook-to-queue integration,
+    and LLM-powered chat for interactive issue drafting.
+
+components:
+
+  issue_store:
+    file: store/issue_store.py
+    class: IssueStore
+    description: SQLite-backed issue lifecycle tracker. Persists issues from
+      webhooks, CLI, and the chat modal. Tracks status transitions.
+    schema:
+      issues:
+        columns:
+          issue_id: TEXT PRIMARY KEY
+          title: TEXT NOT NULL
+          body: TEXT
+          repo: TEXT
+          sender: TEXT
+          source: TEXT DEFAULT 'cli'    # cli | github | codeberg | chat
+          status: TEXT DEFAULT 'pending' # pending | running | needs_human | completed | failed
+          classification: TEXT
+          created_at: REAL
+          updated_at: REAL
+          started_at: REAL
+          completed_at: REAL
+          task_runs: TEXT              # JSON array of TaskRun dicts
+          error: TEXT
+        indexes:
+          - idx_issues_status ON issues(status)
+          - idx_issues_created ON issues(created_at)
+    methods:
+      - insert_issue(data: dict) -> str
+      - next_pending() -> dict | None
+      - update_status(issue_id: str, status: str, **kwargs) -> None
+      - get_issue(issue_id: str) -> dict | None
+      - list_issues(status: str | None, limit: int) -> list[dict]
+      - summary() -> dict
+
+  runner:
+    file: runner.py
+    class: IssueRunner
+    description: >
+      Async loop that polls IssueStore for pending issues and invokes
+      the orchestrator in a background thread to keep the TUI responsive.
+    config:
+      poll_interval_sec: 5  # configurable
+    behavior:
+      - while running:
+          - issue = IssueStore.next_pending()
+          - if issue:
+              - IssueStore.update_status(issue_id, 'running')
+              - spawn thread: orchestrator.invoke(state)
+              - on success: IssueStore.update_status(issue_id, 'completed', task_runs=...)
+              - on escalate_to_human: IssueStore.update_status(issue_id, 'needs_human')
+              - on error: IssueStore.update_status(issue_id, 'failed', error=...)
+          - sleep(poll_interval_sec)
+    signals:
+      - shutdown: cleanup threads, close stores
+      - reload: restart poll loop
+
+  tui:
+    file: tui/app.py
+    class: UniDevApp
+    framework: textual>=0.50
+    description: >
+      Three-panel Textual dashboard. Left: issue queue. Right top: detail + actions.
+      Bottom: scrolling pipeline log. Press 'n' for chat modal.
+    panels:
+      - queue_panel: DataTable with columns (ID, Status, Title, Source)
+      - detail_panel: Issue detail (title, body, status, task_runs)
+      - action_bar: [Approve] [Reject] [Retry] buttons (shown for needs_human)
+      - log_panel: RichLog with streaming task events
+    chat:
+      file: tui/chat.py
+      class: ChatModal
+      model: deepseek-v4-flash, temperature=0.7
+      system_prompt: >
+        You help draft well-structured software issues for a backend development
+        pipeline. Extract requirements from the user's description, suggest a clear
+        title and detailed body. Ask clarifying questions when needed.
+        Be concise and developer-focused.
+      flow:
+        - User describes what they want
+        - LLM drafts title + body
+        - User can iterate or submit
+        - On submit: IssueStore.insert(source='chat')
+
+  cli:
+    file: main.py
+    commands:
+      watch:
+        usage: uni-dev watch [--poll-interval 5]
+        description: Start continuous runner + TUI dashboard.
+        options:
+          - --poll-interval: Seconds between polls (default 5)
+          - --no-tui: Run headless (runner only, no dashboard)
+          - --db: IssueStore database path
+          - --monitor-db: MonitorStore database path
+      approve:
+        usage: uni-dev approve <issue_id>
+        description: Approve a needs_human issue (headless).
+      reject:
+        usage: uni-dev reject <issue_id>
+        description: Reject a needs_human issue (headless).
+      retry:
+        usage: uni-dev retry <issue_id>
+        description: Retry a needs_human/failed issue (headless).
+
+  webhooks:
+    update: server.py
+    change: >
+      On webhook event, insert into IssueStore instead of just returning JSON.
+      Returns {status: 'accepted', issue_id: '<uuid>'} on success.
