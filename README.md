@@ -12,6 +12,7 @@ Powered by DeepSeek via langchain-openai, built on deepagents + langgraph.
 - [Configuration](#configuration)
 - [Quick Start](#quick-start)
 - [CLI Reference](#cli-reference)
+- [Continuous Runner + TUI](#continuous-runner--tui)
 - [Webhooks](#webhooks)
 - [Monitoring](#monitoring)
 - [Pipeline Methodology](#pipeline-methodology)
@@ -138,11 +139,36 @@ code-generator         error      15234ms   d4e5f6a1b2c3
 code-generator         success    11023ms   e5f6a1b2c3d4
 ```
 
-### 4. Start the webhook server
+### 4. Start continuous watch mode
+
+For hands-off automation, run the continuous runner with the TUI dashboard:
+
+```bash
+uni-dev watch
+```
+
+This:
+- Starts a background runner that polls for pending issues every 5 seconds
+- Opens a Textual TUI dashboard showing the issue queue, detail panel, and pipeline log
+- Automatically invokes the orchestrator for each pending issue
+- Accepts webhook events and queues them for processing
+- Lets you draft new issues via an LLM-powered chat modal (press `n`)
+
+To run headless (no dashboard):
+
+```bash
+uni-dev watch --no-tui
+```
+
+### 5. Start the webhook server (optional)
+
+If you want issues to arrive via GitHub/Codeberg webhooks instead of the CLI:
 
 ```bash
 uni-dev listen --port 8080
 ```
+
+Webhook events are automatically inserted into the issue queue and picked up by `uni-dev watch`.
 
 Then configure your GitHub/Codeberg repository's webhook settings to point to `http://your-server:8080/webhook/github`.
 
@@ -153,11 +179,24 @@ Then configure your GitHub/Codeberg repository's webhook settings to point to `h
 | Command | Description |
 |---------|-------------|
 | `uni-dev init <path>` | Initialize knowledge base for a project |
-| `uni-dev run "<issue>"` | Run the DDD→SDD→TDD pipeline |
-| `uni-dev listen [-p PORT]` | Start webhook server |
+| `uni-dev run "<issue>"` | Run the DDD→SDD→TDD pipeline (one-shot) |
+| `uni-dev watch` | Start continuous runner + TUI dashboard |
+| `uni-dev listen [-p PORT]` | Start webhook server (separate process) |
 | `uni-dev status [-d DB]` | Show pipeline status dashboard |
+| `uni-dev approve <id>` | Approve a needs_human issue |
+| `uni-dev reject <id>` | Reject a needs_human issue |
+| `uni-dev retry <id>` | Retry a needs_human/failed issue |
 | `uni-dev --version` | Show version |
 | `uni-dev --help` | Show all commands |
+
+### `uni-dev watch` options
+
+| Option | Description |
+|--------|-------------|
+| `-i, --poll-interval SECS` | Seconds between polls (default: `5`) |
+| `--no-tui` | Run headless (runner only, no dashboard) |
+| `--db PATH` | IssueStore database path (default: `.uni-dev/issues.db`) |
+| `--monitor-db PATH` | MonitorStore database path (default: `.uni-dev/monitor.db`) |
 
 ### `uni-dev run` options
 
@@ -181,6 +220,142 @@ Then configure your GitHub/Codeberg repository's webhook settings to point to `h
 | Option | Description |
 |--------|-------------|
 | `-d, --db PATH` | Path to monitor database (default: `.uni-dev/monitor.db`) |
+
+---
+
+## Continuous Runner + TUI
+
+`uni-dev watch` is the long-running mode. It handles the full automation loop:
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   uni-dev watch                          │
+│                                                          │
+│  ┌────────────┐   ┌──────────────┐   ┌──────────────┐  │
+│  │ Webhook    │   │ Issue Queue  │   │ Pipeline     │  │
+│  │ Listener   │──►│  (SQLite)    │──►│ Runner       │  │
+│  │ :8080      │   │ issues.db    │   │ (background) │  │
+│  └────────────┘   └──────────────┘   └──────┬───────┘  │
+│                                              │          │
+│  ┌────────────┐   ┌──────────────┐           ▼          │
+│  │ Chat Modal │   │ TUI Dashboard│   ┌──────────────┐  │
+│  │ (press 'n')│   │ (Textual)    │   │ Orchestrator │  │
+│  │ v4-flash   │   │ queue|detail │   │ (background  │  │
+│  └─────┬──────┘   │ |log panel   │   │  thread)     │  │
+│        │          └──────────────┘   └──────────────┘  │
+│        └──────────────► Issue Queue                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Issue lifecycle
+
+```
+[webhook / chat / CLI] → pending → running → completed
+                              │          │
+                              │          ├── needs_human → approve → completed
+                              │          │              → reject  → failed
+                              │          │              → retry   → running
+                              │          │
+                              │          └── failed
+                              │
+                              └── (skipped)
+```
+
+### TUI Dashboard
+
+```
+uni-dev watch
+
+┌─────────────┬──────────────────────────────────┐
+│ Issue Queue │  Issue Detail                     │
+│ ─────────── │  ─────────────                    │
+│ #42 pending │  Title: Add avatar upload          │
+│ #43 running │  Status: running                   │
+│ #40 needs_h │  Sub-agent: code-generator         │
+│ #39 done    │  Task runs: 4/5 completed          │
+│ #38 failed  │                                   │
+│             │  [Approve] [Reject] [Retry]       │
+│─────────────│───────────────────────────────────│
+│ Pipeline Log (scrolling)                        │
+│ 12:03:21 Task domain-designer#abc: success       │
+└──────────────────────────────────────────────────┘
+
+Keyboard shortcuts:
+  n     New Issue (opens LLM chat modal)
+  r     Refresh
+  q     Quit
+```
+
+### Chat Modal (press `n`)
+
+Draft new issues using natural language. The LLM (deepseek-v4-flash) helps:
+1. You describe what you need: *"Add user avatar upload with S3 storage, JPEG/PNG, max 5MB"*
+2. The LLM drafts a structured title and body
+3. You can iterate: *"Add JWT auth requirement"*
+4. Click **Submit** → issue goes into the queue → runner picks it up
+
+### Human-in-the-loop
+
+When the orchestrator exhausts retries (escalate_to_human), the issue enters `needs_human` status. You can manage it via:
+
+```bash
+uni-dev approve <id>    # Accept the result, mark completed
+uni-dev reject <id>     # Reject the result, mark failed
+uni-dev retry <id>      # Reset to pending, try again
+```
+
+Or use the TUI buttons when the issue is selected.
+
+### Headless mode
+
+Run without the dashboard for CI/CD or servers:
+
+```bash
+uni-dev watch --no-tui --poll-interval 10
+```
+
+### Issue Queue database
+
+```sql
+-- .uni-dev/issues.db
+issues (
+    issue_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT,
+    repo TEXT,
+    sender TEXT,
+    source TEXT,          -- "cli" | "github" | "codeberg" | "chat"
+    status TEXT,           -- "pending" | "running" | "needs_human" | "completed" | "failed"
+    classification TEXT,
+    created_at REAL,
+    updated_at REAL,
+    started_at REAL,
+    completed_at REAL,
+    task_runs TEXT,        -- JSON array of TaskRun dicts
+    error TEXT
+)
+```
+
+### Programmatic access
+
+```python
+from uni_dev.store.issue_store import IssueStore
+
+store = IssueStore(".uni-dev/issues.db")
+
+# Insert from your own tooling
+store.insert_issue({"title": "Fix timeout bug", "source": "custom"})
+
+# Query status
+pending = store.list_issues(status="pending")
+needs_review = store.list_issues(status="needs_human")
+
+# Get summary
+summary = store.summary()
+# {"total": 42, "pending": 3, "running": 1, "needs_human": 2, ...}
+```
 
 ---
 
@@ -216,10 +391,10 @@ Then configure your GitHub/Codeberg repository's webhook settings to point to `h
 When an issue is created or a PR is opened, the webhook handler:
 1. Validates the HMAC-SHA256 signature
 2. Extracts title, body, number, action, sender, and repo
-3. Logs the event
-4. Returns `{status: "accepted", issue: {...}}`
+3. Inserts the issue into the `IssueStore` queue (`.uni-dev/issues.db`, status=`pending`)
+4. Returns `{status: "accepted", issue_id: "<id>"}`
 
-The orchestrator must be invoked separately for now — future versions will automatically enqueue webhook events to the pipeline.
+The `uni-dev watch` runner picks up pending issues from the queue automatically.
 
 ---
 
@@ -317,9 +492,17 @@ The pipeline controller is **pure Python** and cannot be overridden:
 ```
 ┌──────────────────────────────────────────────────────┐
 │                    Issue Source                       │
-│           CLI · GitHub Webhook · Codeberg Webhook     │
+│  CLI · GitHub Webhook · Codeberg Webhook · Chat     │
 └───────────────────────┬──────────────────────────────┘
                         ▼
+┌──────────────────────────────────────────────────────┐
+│              Continuous Runner                        │
+│  ┌───────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │IssueStore │  │ IssueRunner  │  │  TUI (watch) │  │
+│  │ (SQLite)  │  │ (poll loop)  │  │ 3-panel dash │  │
+│  └───────────┘  └──────┬───────┘  └──────────────┘  │
+└────────────────────────┼──────────────────────────────┘
+                         ▼
 ┌──────────────────────────────────────────────────────┐
 │  Orchestrator (deepagents create_deep_agent)          │
 │  Model: deepseek-v4-pro (DeepSeek via langchain)     │
@@ -382,11 +565,17 @@ uni-dev/
 │   │   ├── server.py
 │   │   ├── github_handler.py
 │   │   └── codeberg_handler.py
+│   ├── store/                # Persistent storage
+│   │   └── issue_store.py    # Issue lifecycle tracker
+│   ├── tui/                  # Textual dashboard
+│   │   ├── app.py            # Main TUI layout
+│   │   └── chat.py           # LLM-powered issue draft
 │   ├── security/             # PII/secret protection
 │   │   └── log_filter.py
-│   └── monitoring/           # Pipeline observability
-│       ├── monitor.py
-│       └── store.py
+│   ├── monitoring/           # Pipeline observability
+│   │   ├── monitor.py
+│   │   └── store.py
+│   └── runner.py             # Continuous pipeline loop
 └── tests/                    # Mirroring src/uni_dev/
 ```
 
@@ -395,10 +584,11 @@ uni-dev/
 ```
 uni-dev ──► imports ──► uni-kb (Knowledge Base)
    │                        │
-   │   deepagents            │   parsers/ (Java, Node.js)
-   │   langgraph             │   store/ (SQLite, ChromaDB, Graph)
-   │   langchain-openai      │   generators/ (6 spec generators)
-   │   click, fastapi        │   mcp_server.py (20 tools)
+│   deepagents            │   parsers/ (Java, Node.js)
+│   langgraph             │   store/ (SQLite, ChromaDB, Graph)
+│   langchain-openai      │   generators/ (6 spec generators)
+│   click, fastapi        │   mcp_server.py (20 tools)
+│   textual, textual-web  │
 ```
 
 ---
@@ -434,6 +624,6 @@ Both GitHub and Codeberg webhook endpoints require HMAC-SHA256 signature validat
 ## Running Tests
 
 ```bash
-uv run pytest -v        # Run all 136 tests
+uv run pytest -v        # Run all 148 tests
 uv run ruff check src/  # Lint
 ```
