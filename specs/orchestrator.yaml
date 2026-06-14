@@ -1,0 +1,131 @@
+# Orchestrator Specification
+# uni-dev — Agent Automation System
+# Milestone: M6-orchestrator-agents
+# Version: 0.1.0
+
+spec:
+  name: orchestrator
+  milestone: M6-orchestrator-agents
+  repo: uni-dev
+  description: >
+    Main deepagent orchestrator that wires the deterministic M5 StateGraph
+    as a CompiledSubAgent and registers 5 LLM sub-agents for the
+    DDD → SDD → TDD pipeline. Powered by DeepSeek via langchain-openai.
+
+model_config:
+  provider: deepseek
+  compatibility: openai
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  models:
+    orchestrator:
+      name: deepseek-v4-pro
+      reasoning_effort: high
+      thinking: { type: enabled }
+    domain_designer:
+      name: deepseek-v4-pro
+      reasoning_effort: high
+      thinking: { type: enabled }
+    reviewer:
+      name: deepseek-v4-pro
+      thinking: { type: enabled }
+    spec_writer:
+      name: deepseek-v4-flash
+    code_generator:
+      name: deepseek-v4-flash
+    test_generator:
+      name: deepseek-v4-flash
+
+pipeline:
+  phases:
+    - ddd:
+        agent: domain_designer
+        input: issue_description
+        output: domain model YAML
+    - sdd:
+        agent: spec_writer
+        input: domain model + existing KB
+        output: OpenAPI 3.0 YAML contract
+    - tdd_tests:
+        agent: test_generator
+        input: spec + existing code
+        output: test files (contract + unit)
+    - tdd_code:
+        agent: code_generator
+        input: spec + failing tests + existing code
+        output: implementation source files
+    - verify:
+        gate: M5 verification_gate (deterministic)
+        on_pass: reviewer
+        on_fail: retry_controller → code_generator
+    - review:
+        agent: reviewer
+        input: implementation + test results + spec
+        output: review report + doc updates
+
+sub_agent_contracts:
+  domain_designer:
+    tools:
+      - search_code
+      - get_class_structure
+      - get_dependency_graph
+      - get_api_contract
+      - filesystem (read-only)
+    output_schema:
+      bounded_contexts: list
+      entities: list
+      aggregates: list
+      value_objects: list
+      relationships: list
+
+  spec_writer:
+    tools:
+      - get_api_contract
+      - get_entity_spec
+      - get_business_logic_doc
+      - get_permission_matrix
+      - filesystem (read/write)
+    output_schema:
+      openapi_version: "3.0.3"
+      paths: dict
+      components:
+        schemas: dict
+        securitySchemes: dict
+
+  test_generator:
+    tools:
+      - get_api_contract
+      - verify_contract
+      - get_entity_spec
+      - shell (pytest, npm test)
+      - filesystem (read/write)
+    output_schema:
+      test_files: list
+      test_count: int
+      contract_tests: list
+      unit_tests: list
+
+  code_generator:
+    tools:
+      - get_business_logic_doc
+      - get_api_contract
+      - get_entity_spec
+      - get_db_schema
+      - shell (build, lint, test)
+      - filesystem (read/write)
+    output_schema:
+      modified_files: list
+      new_files: list
+
+  reviewer:
+    tools:
+      - all MCP tools
+      - compare_api_responses
+      - verify_contract
+      - get_migration_checklist
+      - filesystem (read/write)
+    output_schema:
+      approved: bool
+      issues: list
+      recommendations: list
+      doc_updates: list

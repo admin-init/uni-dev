@@ -1,0 +1,46 @@
+# uni-dev — Pipeline Configuration
+# DeepSeek-powered agent orchestration
+
+model:
+  provider: deepseek
+  base_url: "https://api.deepseek.com"
+  api_key_env: "DEEPSEEK_API_KEY"
+
+  agents:
+    orchestrator:
+      name: deepseek-v4-pro
+      reasoning_effort: high
+      thinking: { type: enabled }
+      temperature: 0.3
+
+    domain_designer:
+      name: deepseek-v4-pro
+      reasoning_effort: high
+      thinking: { type: enabled }
+      temperature: 0.3
+
+    reviewer:
+      name: deepseek-v4-pro
+      thinking: { type: enabled }
+      temperature: 0.1
+
+    spec_writer:
+      name: deepseek-v4-flash
+      temperature: 0.1
+
+    code_generator:
+      name: deepseek-v4-flash
+      temperature: 0.0
+
+    test_generator:
+      name: deepseek-v4-flash
+      temperature: 0.0
+
+pipeline:
+  max_retries: 3
+  max_retry_attempts: 3
+  timeout_per_phase: 300
+
+kb:
+  path: .uni-dev
+  mcp_command: ["uv", "run", "uni-kb", "serve"]
