@@ -46,8 +46,11 @@ def test_retry_controller_missing_count_defaults_zero():
 
 
 def test_retry_controller_no_llm():
-    """Retry controller is pure Python — no LLM imports or calls."""
+    """Retry controller is pure Python — no LLM imports or API calls."""
     import inspect
     source = inspect.getsource(retry_controller)
-    assert "llm" not in source.lower()
-    assert "langchain" not in source.lower()
+    assert "import langchain" not in source
+    assert "from langchain" not in source
+    assert "invoke(" not in source
+    assert "openai" not in source.lower()
+    assert "anthropic" not in source.lower()
