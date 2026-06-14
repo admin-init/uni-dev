@@ -35,6 +35,9 @@ uni-dev = "uni_dev.main:cli"
 [tool.hatch.build.targets.wheel]
 packages = ["src/uni_dev"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
