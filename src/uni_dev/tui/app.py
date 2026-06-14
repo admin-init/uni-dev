@@ -49,7 +49,7 @@ class UniDevApp(App):
 
     def __init__(
         self,
-        issue_db_path: str = ".uni-dev/issues.db",
+        issue_db_path: str = ".uni-kb/issues.db",
         poll_interval: int = 5,
     ) -> None:
         super().__init__()

@@ -29,7 +29,7 @@ class IssueRunner:
 
     def __init__(
         self,
-        issue_db_path: str | Path = ".uni-dev/issues.db",
+        issue_db_path: str | Path = ".uni-kb/issues.db",
         poll_interval_sec: int = _DEFAULT_POLL_INTERVAL,
     ) -> None:
         self._store = IssueStore(issue_db_path)
@@ -95,7 +95,7 @@ class IssueRunner:
             from uni_dev.orchestrator import create_orchestrator
 
             orchestrator = create_orchestrator(
-                monitor_db_path=".uni-dev/monitor.db",
+                monitor_db_path=".uni-kb/monitor.db",
             )
 
             state = {
@@ -112,7 +112,7 @@ class IssueRunner:
                 "migration_idx": 0,
                 "migration_plan": [],
                 "current_phase": "ddd",
-                "kb_path": ".uni-dev",
+                "kb_path": ".uni-kb",
             }
 
             result = orchestrator.invoke(state)

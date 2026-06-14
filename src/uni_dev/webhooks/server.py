@@ -73,7 +73,7 @@ def create_app() -> FastAPI:
         if result.get("status") == "accepted":
             issue_data = result.get("issue", {})
             from uni_dev.store.issue_store import IssueStore
-            store = IssueStore(".uni-dev/issues.db")
+            store = IssueStore(".uni-kb/issues.db")
             issue_id = store.insert_issue({
                 "title": issue_data.get("title", ""),
                 "body": issue_data.get("body", ""),
@@ -117,7 +117,7 @@ def create_app() -> FastAPI:
         if result.get("status") == "accepted":
             issue_data = result.get("issue", {})
             from uni_dev.store.issue_store import IssueStore
-            store = IssueStore(".uni-dev/issues.db")
+            store = IssueStore(".uni-kb/issues.db")
             issue_id = store.insert_issue({
                 "title": issue_data.get("title", ""),
                 "body": issue_data.get("body", ""),

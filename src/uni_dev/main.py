@@ -46,7 +46,7 @@ def run(issue: str, model: str, api_key: str | None, classify: str | None, no_mo
     click.echo(f"Running pipeline for: {issue}")
     if classify:
         click.echo(f"Classification: {classify}")
-    monitor_db = None if no_monitor else ".uni-dev/monitor.db"
+    monitor_db = None if no_monitor else ".uni-kb/monitor.db"
     orchestrator = create_orchestrator(api_key=api_key, monitor_db_path=monitor_db)
     state = {
         "messages": [{"role": "user", "content": issue, "type": "human"}],
@@ -56,7 +56,7 @@ def run(issue: str, model: str, api_key: str | None, classify: str | None, no_mo
         "migration_idx": 0,
         "migration_plan": [],
         "current_phase": "ddd",
-        "kb_path": ".uni-dev",
+        "kb_path": ".uni-kb",
     }
     click.echo("Invoking orchestrator...")
     result = orchestrator.invoke(state)
@@ -92,7 +92,7 @@ def listen(port: int, host: str, secret: str | None) -> None:
 
 
 @cli.command()
-@click.option("-d", "--db", default=".uni-dev/monitor.db", help="Path to monitor SQLite database.")
+@click.option("-d", "--db", default=".uni-kb/monitor.db", help="Path to monitor SQLite database.")
 def status(db: str) -> None:
     """Show pipeline status dashboard."""
     from uni_dev.monitoring.store import MonitorStore
@@ -118,8 +118,8 @@ def status(db: str) -> None:
 @cli.command()
 @click.option("--poll-interval", '-i', default=5, type=int, help="Seconds between polls (default: 5).")
 @click.option("--no-tui", is_flag=True, default=False, help="Run headless (no dashboard).")
-@click.option("--db", default=".uni-dev/issues.db", help="IssueStore database path.")
-@click.option("--monitor-db", default=".uni-dev/monitor.db", help="MonitorStore database path.")
+@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
+@click.option("--monitor-db", default=".uni-kb/monitor.db", help="MonitorStore database path.")
 def watch(poll_interval: int, no_tui: bool, db: str, monitor_db: str) -> None:
     """Start continuous pipeline runner with TUI dashboard."""
     from uni_dev.runner import IssueRunner
@@ -146,7 +146,7 @@ def watch(poll_interval: int, no_tui: bool, db: str, monitor_db: str) -> None:
 
 @cli.command()
 @click.argument("issue_id")
-@click.option("--db", default=".uni-dev/issues.db", help="IssueStore database path.")
+@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
 def approve(issue_id: str, db: str) -> None:
     """Approve a needs_human issue."""
     from uni_dev.store.issue_store import IssueStore
@@ -161,7 +161,7 @@ def approve(issue_id: str, db: str) -> None:
 
 @cli.command()
 @click.argument("issue_id")
-@click.option("--db", default=".uni-dev/issues.db", help="IssueStore database path.")
+@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
 def reject(issue_id: str, db: str) -> None:
     """Reject a needs_human issue."""
     from uni_dev.store.issue_store import IssueStore
@@ -176,7 +176,7 @@ def reject(issue_id: str, db: str) -> None:
 
 @cli.command()
 @click.argument("issue_id")
-@click.option("--db", default=".uni-dev/issues.db", help="IssueStore database path.")
+@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
 def retry(issue_id: str, db: str) -> None:
     """Retry a needs_human or failed issue."""
     from uni_dev.store.issue_store import IssueStore
