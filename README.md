@@ -1,195 +1,439 @@
-# uni-dev — Backend Development Automation
+# uni-dev — Universal Backend Development Framework
 
-Multi-agent framework that automates the full backend SDLC: DDD → SDD → TDD.
+Multi-agent automation for the full backend SDLC: **DDD → SDD → TDD**.
+Powered by DeepSeek via langchain-openai, built on deepagents + langgraph.
 
-Built on deepagents (low-workload harness) + langgraph (controllable key nodes). Consumes uni-kb as its single source of truth.
+---
 
-## Design Principles
+## Table of Contents
 
-| # | Principle | Implementation |
-|---|-----------|----------------|
-| 1 | Specification First | OpenAPI contract written before any code |
-| 2 | Test Before Code | Contract + unit tests before implementation |
-| 3 | Domain Model First | Entities, aggregates, bounded contexts first |
-| 4 | Deterministic Control | Verification gates, retry, routing — pure Python |
-| 5 | LLM for Intelligence | Code gen, architecture, specs — LLM sub-agents |
-| 6 | Single Source of Truth | All agents query uni-kb, never trust memory |
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Quick Start](#quick-start)
+- [CLI Reference](#cli-reference)
+- [Webhooks](#webhooks)
+- [Monitoring](#monitoring)
+- [Pipeline Methodology](#pipeline-methodology)
+- [Architecture](#architecture)
+- [Security](#security)
+
+---
+
+## Prerequisites
+
+- **Python 3.11+**
+- **uv** (package manager): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **DeepSeek API key** — get one at [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys)
+- **uni-kb** — the Knowledge Base library (installed automatically as a dependency)
+
+---
+
+## Installation
+
+```bash
+git clone git@github.com:admin-init/uni-dev.git
+cd uni-dev
+
+# Create virtual environment and install
+uv venv
+uv pip install -e ".[dev]"
+```
+
+The `uni-kb` dependency is resolved from GitHub automatically.
+
+---
+
+## Configuration
+
+### 1. Set your DeepSeek API key
+
+Copy the example file and add your key:
+
+```bash
+cp .env.example .env
+# Edit .env and replace the placeholder:
+# DEEPSEEK_API_KEY=sk-your-actual-key
+```
+
+The orchestrator reads `DEEPSEEK_API_KEY` from the environment. You can also pass it via `--api-key` or set it as an env var directly:
+
+```bash
+export DEEPSEEK_API_KEY=sk-your-actual-key
+```
+
+### 2. Model configuration (optional)
+
+Edit `config/default.yaml` to change model assignments, temperatures, or thinking mode. Defaults are:
+
+| Role | Model | Reasoning |
+|------|-------|-----------|
+| orchestrator | `deepseek-v4-pro` | high |
+| domain-designer | `deepseek-v4-pro` | high |
+| reviewer | `deepseek-v4-pro` | — |
+| spec-writer | `deepseek-v4-flash` | — |
+| code-generator | `deepseek-v4-flash` | — |
+| test-generator | `deepseek-v4-flash` | — |
+
+### 3. Webhook secret (optional)
+
+Required if you use the webhook server:
+
+```bash
+export WEBHOOK_SECRET=your-hmac-secret
+```
+
+---
+
+## Quick Start
+
+### 1. Initialize a project's knowledge base
+
+Point uni-dev at your backend source tree. This parses code into SQLite, ChromaDB, and a NetworkX dependency graph:
+
+```bash
+uni-dev init /path/to/your/backend
+```
+
+This creates a `.uni-dev/` directory with the knowledge base data.
+
+### 2. Run the pipeline on an issue
+
+```bash
+uni-dev run "Add user avatar upload endpoint with S3 storage"
+```
+
+The orchestrator will:
+1. **DDD** — `domain-designer` analyzes the domain, identifies entities/aggregates
+2. **SDD** — `spec-writer` generates an OpenAPI 3.0 contract
+3. **TDD** — `test-generator` writes contract + unit tests
+4. **TDD** — `code-generator` implements the code to pass tests
+5. **Verify** — deterministic gate checks test results
+6. **Review** — `reviewer` validates the implementation
+
+Each sub-agent task is recorded by the monitor middleware.
+
+### 3. Check the pipeline dashboard
+
+```bash
+uni-dev status
+```
+
+Shows recent task runs, success/error counts, and average durations:
+
+```
+=== uni-dev Pipeline Status ===
+
+Total runs:   5
+Success:      4
+Errors:       1
+Running:      0
+Avg duration: 3200ms
+
+Agent                  Status     Duration  ID
+domain-designer        success     4521ms   a1b2c3d4e5f6
+spec-writer            success     2134ms   b2c3d4e5f6a1
+test-generator         success     3892ms   c3d4e5f6a1b2
+code-generator         error      15234ms   d4e5f6a1b2c3
+code-generator         success    11023ms   e5f6a1b2c3d4
+```
+
+### 4. Start the webhook server
+
+```bash
+uni-dev listen --port 8080
+```
+
+Then configure your GitHub/Codeberg repository's webhook settings to point to `http://your-server:8080/webhook/github`.
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `uni-dev init <path>` | Initialize knowledge base for a project |
+| `uni-dev run "<issue>"` | Run the DDD→SDD→TDD pipeline |
+| `uni-dev listen [-p PORT]` | Start webhook server |
+| `uni-dev status [-d DB]` | Show pipeline status dashboard |
+| `uni-dev --version` | Show version |
+| `uni-dev --help` | Show all commands |
+
+### `uni-dev run` options
+
+| Option | Description |
+|--------|-------------|
+| `-m, --model MODEL` | Model for orchestrator (default: `deepseek-v4-pro`) |
+| `-k, --api-key KEY` | DeepSeek API key (default: `$DEEPSEEK_API_KEY`) |
+| `-c, --classify TYPE` | Issue type: `add_feature`, `update_api`, `remove_feature`, `refactor` |
+| `--no-monitor` | Disable the monitor middleware |
+
+### `uni-dev listen` options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --port PORT` | Port to bind (default: `8080`) |
+| `-h, --host HOST` | Host to bind (default: `0.0.0.0`) |
+| `-s, --secret SECRET` | Webhook HMAC secret (default: `$WEBHOOK_SECRET`) |
+
+### `uni-dev status` options
+
+| Option | Description |
+|--------|-------------|
+| `-d, --db PATH` | Path to monitor database (default: `.uni-dev/monitor.db`) |
+
+---
+
+## Webhooks
+
+### Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/webhook/github` | POST | HMAC-SHA256 (`X-Hub-Signature-256`) | GitHub issue/PR events |
+| `/webhook/codeberg` | POST | HMAC-SHA256 (`X-Codeberg-Signature`) | Codeberg issue events |
+| `/health` | GET | None | Server health check |
+
+### GitHub Setup
+
+1. Start the server: `uni-dev listen -p 8080 -s your-secret`
+2. In your GitHub repo: Settings → Webhooks → Add webhook
+3. Payload URL: `https://your-server:8080/webhook/github`
+4. Content type: `application/json`
+5. Secret: same as `-s` / `WEBHOOK_SECRET`
+6. Events: "Issues" and "Pull requests"
+
+### Codeberg Setup
+
+1. Same server startup
+2. In your Codeberg repo: Settings → Webhooks
+3. Target URL: `https://your-server:8080/webhook/codeberg`
+4. Secret: same as `WEBHOOK_SECRET`
+5. Events: "Issues"
+
+### How it works
+
+When an issue is created or a PR is opened, the webhook handler:
+1. Validates the HMAC-SHA256 signature
+2. Extracts title, body, number, action, sender, and repo
+3. Logs the event
+4. Returns `{status: "accepted", issue: {...}}`
+
+The orchestrator must be invoked separately for now — future versions will automatically enqueue webhook events to the pipeline.
+
+---
+
+## Monitoring
+
+The monitor middleware records every sub-agent `task()` delegation with timing, status, and result metadata.
+
+### Three output channels
+
+| Channel | Location | Use |
+|---------|----------|-----|
+| **State** | `state["task_runs"]` | In-session querying via agent state |
+| **SQLite** | `.uni-dev/monitor.db` | Multi-session history, queried by `uni-dev status` |
+| **Logs/Streams** | Python logging + stream events | Real-time dashboards, debugging |
+
+### Database schema
+
+```sql
+-- .uni-dev/monitor.db
+task_runs (
+    run_id TEXT PRIMARY KEY,
+    subagent_type TEXT NOT NULL,     -- "domain-designer", "spec-writer", ...
+    description TEXT,                 -- Task description
+    parent_agent TEXT DEFAULT 'orchestrator',
+    started_at REAL NOT NULL,
+    completed_at REAL,
+    duration_ms INTEGER,
+    status TEXT DEFAULT 'running',    -- "running" | "success" | "error"
+    error TEXT,
+    result_length INTEGER
+)
+```
+
+### Querying manually
+
+```python
+from uni_dev.monitoring.store import MonitorStore
+
+store = MonitorStore(".uni-dev/monitor.db")
+
+# All domain-designer runs
+runs = store.query_runs(subagent_type="domain-designer")
+
+# Failed tasks
+errors = store.query_runs(status="error")
+
+# Aggregate stats
+summary = store.summary()
+# {"total": 42, "success_count": 38, "error_count": 4, ...}
+```
+
+---
+
+## Pipeline Methodology
+
+uni-dev enforces three phases, each handled by a specialized agent:
+
+### 1. DDD — Domain-Driven Design (`domain-designer`)
+
+Before any code is written:
+- Identify **bounded contexts** (module boundaries)
+- Define **entities**, **aggregates**, **value objects**
+- Map **relationships** and **invariants**
+
+Output: domain model YAML consumed by the spec writer and code generator.
+
+### 2. SDD — Specification-Driven Development (`spec-writer`)
+
+Before any implementation:
+- Generate a complete **OpenAPI 3.0 YAML** contract
+- Define paths, request/response schemas, security schemes
+- Include error responses (400, 401, 403, 404, 500)
+
+The spec is the **source of truth** — code must conform.
+
+### 3. TDD — Test-Driven Development (`test-generator` + `code-generator`)
+
+**Red** → `test-generator` writes tests that **fail** (contract tests + unit tests).
+
+**Green** → `code-generator` writes **minimal** code to pass tests, following existing patterns and conventions.
+
+**Refactor** → after passing, the deterministic verification gate runs.
+
+### Verification Gate (deterministic, zero LLM)
+
+The pipeline controller is **pure Python** and cannot be overridden:
+- Test exit code must pass (pytest exit 0)
+- Contract must be valid (MCP `verify_contract()`)
+- Max 3 retry attempts, then escalates to human review
+
+---
 
 ## Architecture
 
 ```
-Issue (GitHub / Codeberg / CLI)
-  │
-  ▼
-┌──────────────────────────────────────────────┐
-│  Orchestrator (deepagents create_deep_agent)  │
-│  System prompt: DDD → SDD → TDD methodology   │
-├──────────────────────────────────────────────┤
-│  LLM Sub-Agents                               │
-│  ┌────────────┐ ┌──────────┐ ┌─────────────┐ │
-│  │ domain-    │ │ spec-    │ │ code-       │ │
-│  │ designer   │ │ writer   │ │ generator   │ │
-│  └────────────┘ └──────────┘ └─────────────┘ │
-│  ┌────────────┐ ┌──────────┐                 │
-│  │ test-      │ │ reviewer │                 │
-│  │ generator  │ └──────────┘                 │
-│  └────────────┘                              │
-├──────────────────────────────────────────────┤
-│  Deterministic Control (pure Python, 0 LLM)   │
-│  ┌──────────┐ ┌──────────┐ ┌───────────┐    │
-│  │Verif.Gate│ │Retry Ctrl│ │Class.Router│    │
-│  │   ①      │ │   ②      │ │    ④      │    │
-│  └──────────┘ └──────────┘ └───────────┘    │
-│  ┌───────────┐                               │
-│  │Mig.Stepper│                               │
-│  │    ③      │                               │
-│  └───────────┘                               │
-├──────────────────────────────────────────────┤
-│  Knowledge Base (uni-kb)                      │
-│  SQLite · ChromaDB · NetworkX · MCP           │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                    Issue Source                       │
+│           CLI · GitHub Webhook · Codeberg Webhook     │
+└───────────────────────┬──────────────────────────────┘
+                        ▼
+┌──────────────────────────────────────────────────────┐
+│  Orchestrator (deepagents create_deep_agent)          │
+│  Model: deepseek-v4-pro (DeepSeek via langchain)     │
+│  System prompt: DDD → SDD → TDD methodology           │
+├──────────────────────────────────────────────────────┤
+│  LLM Sub-Agents                                       │
+│  ┌─────────────┐ ┌───────────┐ ┌──────────────┐     │
+│  │ domain-     │ │ spec-     │ │ code-        │     │
+│  │ designer    │ │ writer    │ │ generator    │     │
+│  │ (v4-pro)    │ │ (v4-flash)│ │ (v4-flash)   │     │
+│  └─────────────┘ └───────────┘ └──────────────┘     │
+│  ┌─────────────┐ ┌───────────┐                       │
+│  │ test-       │ │ reviewer  │                       │
+│  │ generator   │ │ (v4-pro)  │                       │
+│  │ (v4-flash)  │ └───────────┘                       │
+│  └─────────────┘                                      │
+├──────────────────────────────────────────────────────┤
+│  Deterministic Core (pure Python, 0 LLM, ~50 LOC ea) │
+│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌───────┐ │
+│  │Verif.Gate│ │Retry Ctrl│ │Class.Router│ │Mig.Step│ │
+│  │   ①      │ │   ②      │ │    ④      │ │  ③   │ │
+│  └──────────┘ └──────────┘ └───────────┘ └───────┘ │
+├──────────────────────────────────────────────────────┤
+│  Middleware                                           │
+│  ┌──────────────┐  ┌─────────────────┐               │
+│  │ LogFilter    │  │ MonitorMiddleware│               │
+│  │ (PII redact) │  │ (task tracking) │               │
+│  └──────────────┘  └─────────────────┘               │
+├──────────────────────────────────────────────────────┤
+│  Knowledge Base (uni-kb)                              │
+│  SQLite (8 tables) · ChromaDB (14 indexes) ·         │
+│  NetworkX graph · MCP server (20 tools)              │
+└──────────────────────────────────────────────────────┘
 ```
 
-## Phase 5: Deterministic Core
-
-### 5.1 Four LangGraph Nodes (`core/`)
-
-Zero LLM calls. Cannot be overridden, hallucinated, or skipped. ~50 LOC total.
-
-| # | Node | File | Logic | LOC |
-|---|------|------|-------|-----|
-| ① | Verification Gate | `core/verification_gate.py` | Reads MCP `compare_api_responses()` + `verify_contract()` + test exit code. Returns `pass` / `fail`. | ~16 |
-| ② | Retry Controller | `core/retry_controller.py` | `attempts < 3 ? "retry" : "escalate_to_human"` | ~10 |
-| ③ | Migration Stepper | `core/migration_stepper.py` | `idx += 1; return "done" if idx >= len(plan) else "next"` | ~11 |
-| ④ | Classification Router | `core/classification_router.py` | Dict lookup: `routes.get(type, default)`. Immutable table. | ~13 |
-
-### 5.2 Compiled StateGraph (`core/graph.py`)
+### Directory Structure
 
 ```
-[START] → ClassificationRouter
-  ├─ "add_feature"  → DomainDesigner → SpecWriter → TestGenerator → CodeGenerator → VerificationGate
-  ├─ "update_api"   → SpecWriter                    → TestGenerator → CodeGenerator → VerificationGate
-  ├─ "remove"       → DomainDesigner → SpecWriter                    → CodeGenerator → VerificationGate
-  └─ "refactor"     → DomainDesigner → SpecWriter → TestGenerator → CodeGenerator → VerificationGate
-
-VerificationGate
-  ├─ "pass"         → Reviewer → [END]
-  └─ "fail"         → RetryController
-                        ├─ "retry"            → back to CodeGenerator
-                        └─ "escalate_to_human" → [END]
+uni-dev/
+├── pyproject.toml
+├── config/default.yaml      # Model + pipeline settings
+├── skills/backend-dev/       # Progressive disclosure skill
+├── specs/                    # SDD specifications (per component)
+├── src/uni_dev/
+│   ├── main.py               # CLI entry point (click)
+│   ├── orchestrator.py       # Main deepagent pipeline
+│   ├── core/                 # Deterministic LangGraph nodes
+│   │   ├── graph.py          # Compiled StateGraph
+│   │   ├── verification_gate.py
+│   │   ├── retry_controller.py
+│   │   ├── classification_router.py
+│   │   └── migration_stepper.py
+│   ├── agents/               # LLM sub-agents
+│   │   ├── domain_designer.py
+│   │   ├── spec_writer.py
+│   │   ├── code_generator.py
+│   │   ├── test_generator.py
+│   │   └── reviewer.py
+│   ├── webhooks/             # Issue ingestion
+│   │   ├── server.py
+│   │   ├── github_handler.py
+│   │   └── codeberg_handler.py
+│   ├── security/             # PII/secret protection
+│   │   └── log_filter.py
+│   └── monitoring/           # Pipeline observability
+│       ├── monitor.py
+│       └── store.py
+└── tests/                    # Mirroring src/uni_dev/
 ```
 
-### 5.3 State Schema
+### Dependency Flow
 
-```python
-class UniDevState(TypedDict):
-    messages: list[BaseMessage]
-    classification: str       # add_feature | update_api | remove | refactor
-    attempt_count: int
-    test_results: dict        # {pass: bool, failures: list, output: str}
-    migration_idx: int
-    migration_plan: list[str]
-    current_phase: str        # ddd | sdd | tdd | verify | done
-    kb_path: str              # .uni-dev/ path
+```
+uni-dev ──► imports ──► uni-kb (Knowledge Base)
+   │                        │
+   │   deepagents            │   parsers/ (Java, Node.js)
+   │   langgraph             │   store/ (SQLite, ChromaDB, Graph)
+   │   langchain-openai      │   generators/ (6 spec generators)
+   │   click, fastapi        │   mcp_server.py (20 tools)
 ```
 
-## Phase 6: Orchestrator + Sub-Agents
+---
 
-### 6.1 Orgestrator (`orchestrator.py`)
+## Security
 
-Main deepagent that wraps the deterministic graph. Sub-agents for creative/LLM work.
+### Log filter
 
-```python
-agent = create_deep_agent(
-    model="anthropic:claude-sonnet-4-6",
-    system_prompt="DDD → SDD → TDD methodology. Query KB before decisions.",
-    subagents=[
-        domain_designer_subagent,
-        spec_writer_subagent,
-        code_generator_subagent,
-        test_generator_subagent,
-        reviewer_subagent,
-        CompiledSubAgent(
-            name="pipeline-controller",
-            description="Deterministic workflow controller.",
-            runnable=compile_pipeline_graph(),
-        ),
-    ],
-    skills=["skills/backend-dev/"],
-)
-```
+The `LogFilter` middleware redacts sensitive data from all tool call arguments and results before they reach logs or the knowledge base:
 
-### 6.2 Sub-Agents (`agents/`)
+| Pattern | Replacement |
+|---------|-------------|
+| Bearer tokens | `Bearer <REDACTED>` |
+| API keys (`api_key=...`, `api-key: ...`) | `api_key=<REDACTED>` |
+| Passwords | `password=<REDACTED>` |
+| Email addresses | `<EMAIL>` |
+| PostgreSQL URLs | `postgresql://<CREDENTIALS>@...` |
+| MongoDB URLs | `mongodb://<CREDENTIALS>@...` |
+| Redis URLs | `REDIS_URL=<REDACTED>` |
 
-| Agent | Phase | Responsibility | Key Tools |
-|-------|-------|----------------|-----------|
-| `domain_designer.py` | DDD | Identify entities, aggregates, bounded contexts | `search_code`, `get_class_structure`, `get_dependency_graph` |
-| `spec_writer.py` | SDD | Write OpenAPI 3.0 YAML contracts | `get_api_contract`, `get_entity_spec`, filesystem |
-| `test_generator.py` | TDD | Contract tests + unit tests (before code) | `get_api_contract`, `verify_contract`, shell |
-| `code_generator.py` | TDD | Implement from spec, fix from test failures | filesystem, shell, `get_business_logic_doc` |
-| `reviewer.py` | Post | Verify, document, identify gaps | All MCP tools, `compare_api_responses` |
+### Webhook signature validation
 
-## Phase 7: Security Filter
+Both GitHub and Codeberg webhook endpoints require HMAC-SHA256 signature validation. Without a valid `WEBHOOK_SECRET`, requests return `401 Unauthorized`.
 
-### `security/log_filter.py`
+### Credentials policy
 
-Middleware that intercepts tool call args/results — redacts PII/secrets before logging or KB insertion.
+- **Zero hardcoded credentials** — all secrets via environment variables (`DEEPSEEK_API_KEY`, `WEBHOOK_SECRET`)
+- **`.env` files** — never committed (`.gitignore` excludes `*.env`)
+- **API keys** — never logged, never stored in the knowledge base
 
-Patterns:
-- JWT tokens (`Bearer eyJ...`)
-- API keys (`api_key=sk-...`)
-- Passwords (`password=...`)
-- Email addresses
-- Database connection strings
-- Redis URLs
+---
 
-Integrates as a deepagent middleware that wraps all tool calls.
-
-## Phase 8: Webhooks + CLI
-
-### CLI (`main.py`)
+## Running Tests
 
 ```bash
-uni-dev init /path/to/project     # Scaffold .uni-dev/ with KB
-uni-dev listen --port 8080        # Start webhook server
-uni-dev run "Add avatar upload"   # Single-shot pipeline run
-uni-dev status                    # Migration dashboard
-```
-
-### Webhooks (`webhooks/`)
-
-| Endpoint | Source |
-|----------|--------|
-| `POST /webhook/github` | GitHub Issues / PR events |
-| `POST /webhook/codeberg` | Codeberg / Tea issues |
-
-FastAPI server. Validates payload, extracts issue content, enqueues to orchestrator.
-
-## Dependencies
-
-```
-uni-kb
-deepagents>=0.5.3
-langgraph
-langchain
-langchain-openai
-langchain-anthropic
-click
-fastapi
-uvicorn
-pyyaml
-```
-
-## Pipeline Flow Summary
-
-```
-Issue Received → ClassificationRouter
-  → [DDD] DomainDesigner queries KB, outputs domain model
-  → [SDD] SpecWriter generates/updates OpenAPI contract
-  → [TDD] TestGenerator writes tests
-  → [TDD] CodeGenerator implements code
-  → [TDD] VerificationGate checks tests pass + contract valid
-    → pass: Reviewer documents, updates KB → END
-    → fail: RetryController (max 3) → back to CodeGenerator
-         → exhausted: escalate_to_human → END
+uv run pytest -v        # Run all 136 tests
+uv run ruff check src/  # Lint
 ```
