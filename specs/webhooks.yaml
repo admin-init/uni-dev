@@ -1,0 +1,66 @@
+# Webhooks Specification
+# uni-dev — Agent Automation System
+# Milestone: M8-webhooks-cli
+# Version: 0.1.0
+
+spec:
+  name: webhooks
+  milestone: M8-webhooks-cli
+  repo: uni-dev
+  description: >
+    FastAPI webhook server for receiving GitHub and Codeberg issue/PR
+    events. Validates payload signatures, extracts issue content, and
+    enqueues work to the orchestrator.
+
+server:
+  framework: FastAPI
+  endpoints:
+    - path: POST /webhook/github
+      handler: github_handler
+      description: Receives GitHub issue/PR webhook events
+      validation: HMAC-SHA256 signature verification via X-Hub-Signature-256
+      payload: GitHub webhook payload (issue, pull_request, issues events)
+
+    - path: POST /webhook/codeberg
+      handler: codeberg_handler
+      description: Receives Codeberg/Tea issue events
+      validation: HMAC-SHA256 signature verification
+      payload: Codeberg webhook payload
+
+    - path: GET /health
+      handler: health_check
+      description: Returns server status
+      response: {status: "ok", version: "0.1.0"}
+
+handlers:
+  github_handler:
+    module: webhooks.github_handler
+    class: GitHubHandler
+    methods:
+      - validate_signature(payload: bytes, signature: str, secret: str) -> bool
+      - extract_issue(body: dict) -> IssueData | None
+      - handle_event(body: dict) -> dict
+
+  codeberg_handler:
+    module: webhooks.codeberg_handler
+    class: CodebergHandler
+    methods:
+      - validate_signature(payload: bytes, signature: str, secret: str) -> bool
+      - extract_issue(body: dict) -> IssueData | None
+      - handle_event(body: dict) -> dict
+
+data_model:
+  IssueData:
+    title: str
+    body: str
+    number: int
+    url: str
+    action: str  # "opened" | "edited" | "closed"
+    sender: str
+    repo: str
+
+signature_verification:
+  algorithm: HMAC-SHA256
+  header: X-Hub-Signature-256 (GitHub), X-Codeberg-Signature (Codeberg)
+  format: sha256=<hex-digest>
+  secret_env: WEBHOOK_SECRET
