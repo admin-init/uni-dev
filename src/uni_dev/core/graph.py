@@ -65,6 +65,19 @@ def _route_escalation(state: UniDevState) -> Literal["SpecWriter", "DomainDesign
     return result["next_node"]  # type: ignore[return-value]
 
 
+def _route_pause_if_instruction(state: UniDevState) -> Literal["__end__", "__next__"]:
+    """Pause graph execution when a next_action instruction is set.
+
+    When a node produces a CALL_SUBAGENT instruction, the graph must stop
+    so the orchestrator loop can execute the sub-agent via task() and
+    feed the result back into state. When no instruction is set, the
+    node was skipped (already done), so continue to the next node.
+    """
+    if state.get("next_action"):
+        return "__end__"
+    return "__next__"
+
+
 def _last_message_text(state: UniDevState) -> str:
     """Extract text from the last human message in state."""
     msgs = state.get("messages", [])
@@ -199,10 +212,26 @@ def build_graph() -> CompiledStateGraph:
         {"DomainDesigner": "DomainDesigner", "SpecWriter": "SpecWriter"},
     )
 
-    builder.add_edge("DomainDesigner", "SpecWriter")
-    builder.add_edge("SpecWriter", "TestGenerator")
-    builder.add_edge("TestGenerator", "CodeGenerator")
-    builder.add_edge("CodeGenerator", "verification_gate")
+    builder.add_conditional_edges(
+        "DomainDesigner",
+        _route_pause_if_instruction,
+        {"__end__": END, "__next__": "SpecWriter"},
+    )
+    builder.add_conditional_edges(
+        "SpecWriter",
+        _route_pause_if_instruction,
+        {"__end__": END, "__next__": "TestGenerator"},
+    )
+    builder.add_conditional_edges(
+        "TestGenerator",
+        _route_pause_if_instruction,
+        {"__end__": END, "__next__": "CodeGenerator"},
+    )
+    builder.add_conditional_edges(
+        "CodeGenerator",
+        _route_pause_if_instruction,
+        {"__end__": END, "__next__": "verification_gate"},
+    )
 
     builder.add_conditional_edges(
         "verification_gate",

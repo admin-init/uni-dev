@@ -217,6 +217,28 @@ def test_graph_invoke_with_full_state_runs_to_completion():
     assert result.get("current_phase") == "done"
 
 
+def test_graph_pauses_on_next_action():
+    """Graph routes to END when a node produces a next_action instruction."""
+    graph = build_graph()
+    state = _base_state(classification="add_feature")
+    result = graph.invoke(state)
+    assert "next_action" in result
+    assert result["next_action"]["subagent"] == "domain-designer"
+    assert result["current_phase"] == "spec_write"
+
+
+def test_graph_resumes_after_phase_complete():
+    """Graph advances past completed phases when state is populated."""
+    graph = build_graph()
+    state = _base_state(
+        classification="add_feature",
+        domain_model={"entities": ["User"]},
+    )
+    result = graph.invoke(state)
+    assert result["next_action"]["subagent"] == "spec-writer"
+    assert result["current_phase"] == "test_gen"
+
+
 def test_graph_no_llm_in_node_source():
     """Instruction-producing nodes have no LLM imports or API calls."""
     import inspect
