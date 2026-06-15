@@ -17,7 +17,7 @@ def test_create_domain_designer_defaults():
 
 def test_create_domain_designer_with_model():
     """Domain designer sub-agent with explicit model override."""
-    agent = create_domain_designer(model_name="deepseek-v4-pro")
+    agent = create_domain_designer(model="deepseek-v4-pro")
     assert agent["name"] == "domain-designer"
     assert agent["model"] == "deepseek-v4-pro"
 

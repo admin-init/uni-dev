@@ -17,7 +17,7 @@ def test_create_reviewer_defaults():
 
 def test_create_reviewer_with_model():
     """Reviewer sub-agent with explicit model override."""
-    agent = create_reviewer(model_name="deepseek-v4-pro")
+    agent = create_reviewer(model="deepseek-v4-pro")
     assert agent["name"] == "reviewer"
     assert agent["model"] == "deepseek-v4-pro"
 

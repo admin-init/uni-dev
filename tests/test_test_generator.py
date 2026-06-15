@@ -17,7 +17,7 @@ def test_create_test_generator_defaults():
 
 def test_create_test_generator_with_model():
     """Test generator sub-agent with explicit model override."""
-    agent = create_test_generator(model_name="deepseek-v4-flash")
+    agent = create_test_generator(model="deepseek-v4-flash")
     assert agent["name"] == "test-generator"
     assert agent["model"] == "deepseek-v4-flash"
 
