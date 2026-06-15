@@ -11,7 +11,10 @@ from uni_dev.orchestrator import (
     _load_config,
     _MODEL_MAP,
     _MODEL_TEMPERATURE_MAP,
+    _merge_subagent_output,
+    MAX_LOOP_ITERATIONS,
     create_orchestrator,
+    run_pipeline_loop,
 )
 
 
@@ -44,7 +47,7 @@ def test_get_api_key_raises_on_placeholder():
 def test_create_model_basic():
     """Creates ChatOpenAI model with basic settings."""
     model = _create_model(
-        model_name="deepseek-v4-flash",
+        model="deepseek-v4-flash",
         base_url="https://api.deepseek.com",
         api_key="sk-test",
     )
@@ -56,7 +59,7 @@ def test_create_model_basic():
 def test_create_model_with_reasoning():
     """Creates ChatOpenAI with reasoning_effort and thinking params."""
     model = _create_model(
-        model_name="deepseek-v4-pro",
+        model="deepseek-v4-pro",
         base_url="https://api.deepseek.com",
         api_key="sk-test",
         temperature=0.3,
@@ -93,14 +96,14 @@ def test_build_sub_agents():
         base_url="https://api.deepseek.com",
         api_key="sk-test",
     )
-    assert len(agents) == 6
+    assert len(agents) == 5
     names = [a["name"] for a in agents if hasattr(a, "__getitem__")]
     assert "domain-designer" in names
     assert "spec-writer" in names
     assert "test-generator" in names
     assert "code-generator" in names
     assert "reviewer" in names
-    assert "pipeline-controller" in names
+    # pipeline-controller CompiledSubAgent removed — graph is driven by run_pipeline_loop now
 
 
 def test_create_orchestrator_requires_api_key():
@@ -134,3 +137,39 @@ def test_load_config_defaults():
     """Loading missing config returns empty dict."""
     config = _load_config()
     assert isinstance(config, dict)
+
+
+def test_merge_subagent_output_domain_designer():
+    """_merge_subagent_output writes domain_model."""
+    state = {}
+    state = _merge_subagent_output(state, "domain-designer", {"result": {"entities": ["User"]}})
+    assert state["domain_model"] == {"entities": ["User"]}
+
+
+def test_merge_subagent_output_spec_writer():
+    """_merge_subagent_output writes api_spec."""
+    state = {}
+    state = _merge_subagent_output(state, "spec-writer", {"result": "openapi: 3.0.0\n..."})
+    assert "openapi" in state["api_spec"]
+
+
+def test_merge_subagent_output_code_generator_with_test_results():
+    """_merge_subagent_output handles code-generator with modified_files and test_results."""
+    state = {}
+    result = {"result": {"modified_files": ["src/app.py"], "test_results": {"pass": True, "failures": []}}}
+    state = _merge_subagent_output(state, "code-generator", result)
+    assert state["modified_files"] == ["src/app.py"]
+    assert state["test_results"]["pass"] is True
+
+
+def test_merge_subagent_output_reviewer():
+    """_merge_subagent_output writes review_report."""
+    state = {}
+    state = _merge_subagent_output(state, "reviewer", {"result": {"approved": True, "issues": []}})
+    assert state["review_report"]["approved"] is True
+
+
+def test_max_loop_iterations():
+    """MAX_LOOP_ITERATIONS is the circuit breaker constant."""
+    assert MAX_LOOP_ITERATIONS == 50
+    assert isinstance(MAX_LOOP_ITERATIONS, int)
