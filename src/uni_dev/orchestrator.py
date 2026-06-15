@@ -318,14 +318,133 @@ Core principles:
 Always query the Knowledge Base before making decisions.
 Defer to deterministic nodes (verification, retry, routing) — do not override them.
 
-Pipeline:
-1. Classify the issue (add_feature, update_api, remove_feature, refactor)
-2. Call run_pipeline_loop with the initial state — it handles the full DDD→SDD→TDD→Verify pipeline automatically
-3. Review the final state and report results to the user
+Pipeline execution:
+1. Classify the issue: add_feature, update_api, remove_feature, or refactor
+2. Call run_pipeline_loop with empty state_json="" to start the pipeline
+3. The tool returns an instruction: {action: "CALL_TASK", subagent: "...", subagent_input: {...}, state_json: "..."}
+4. Call task(subagent_type=<subagent>, description=<...>) with the subagent and input
+5. Take the task() result and merge it into state_json, then call run_pipeline_loop again
+6. Repeat until the tool returns {action: "COMPLETE", summary: {...}}
+7. Report the summary to the user
 
-For deterministic pipeline execution, use the run_pipeline_loop tool.
-For individual phase work, use task() to delegate to sub-agents directly.
+The run_pipeline_loop tool enforces the correct ordering:
+DomainDesigner → SpecWriter → TestGenerator → CodeGenerator → VerificationGate → Reviewer
+You cannot skip steps — the tool will only advance when each phase completes.
 """
+
+
+def _make_pipeline_tool(
+    sub_agents: list[SubAgent],
+    kb_path: str = ".uni-kb",
+) -> Any:
+    """Create the run_pipeline_loop tool for the deepagent.
+
+    Returns instructions for the LLM to execute via task() calls.
+    The LLM drives the loop — the graph enforces ordering.
+    Each invocation feeds the result of the previous task() call
+    back into the graph for the next step.
+
+    Args:
+        sub_agents: List of SubAgent dicts from _build_sub_agents().
+        kb_path: Path to knowledge base directory.
+
+    Returns:
+        A callable tool function compatible with deepagent's tool interface.
+    """
+    from langchain_core.messages import HumanMessage
+
+    def pipeline_tool(
+        state_json: str = "",
+        merge_subagent: str = "",
+        merge_result_json: str = "",
+    ) -> str:
+        """Advance the DDD->SDD->TDD pipeline one step.
+
+        Three modes:
+        1. Start: pipeline_tool(state_json="")
+        2. After task(): pipeline_tool(state_json=..., merge_subagent=..., merge_result_json=...)
+        3. Re-invoke: pipeline_tool(state_json=...)  — for retry/blocked paths
+
+        Args:
+            state_json: JSON-serialized UniDevState from previous step.
+            merge_subagent: Sub-agent name whose task() result to merge.
+            merge_result_json: JSON result from the task() call.
+        """
+        import json as _json
+
+        from uni_dev.core.graph import build_graph
+
+        if state_json.strip():
+            state = _json.loads(state_json)
+        else:
+            msg_text = ""
+            state: dict[str, Any] = {
+                "messages": [HumanMessage(content=msg_text)],
+                "classification": "add_feature",
+                "attempt_count": 0,
+                "test_results": {"pass": False, "failures": [], "output": ""},
+                "migration_idx": 0,
+                "migration_plan": [],
+                "current_phase": "ddd",
+                "kb_path": kb_path,
+            }
+
+        if merge_subagent and merge_result_json:
+            raw = _json.loads(merge_result_json)
+            if isinstance(raw, dict) and raw.get("status") == "BLOCKED":
+                blockers = state.get("blockers", [])
+                blockers.append(raw)
+                state["blockers"] = blockers
+            else:
+                state = _merge_subagent_output(
+                    state, merge_subagent,
+                    raw if isinstance(raw, dict) else {"result": raw},
+                )
+            state.pop("next_action", None)
+
+        graph = build_graph()
+        result = graph.invoke(state)
+        state.update(result)
+
+        action = state.get("next_action")
+        if not action or action.get("type") == "COMPLETE":
+            state["status"] = "complete"
+            return _json.dumps(
+                {
+                    "action": "COMPLETE",
+                    "summary": {
+                        "domain_model": state.get("domain_model"),
+                        "api_spec_exists": bool(state.get("api_spec")),
+                        "test_files": state.get("test_files", []),
+                        "modified_files": state.get("modified_files", []),
+                        "test_results": state.get("test_results", {}),
+                        "review_report": state.get("review_report", {}),
+                        "blockers": state.get("blockers", []),
+                        "phase": state.get("current_phase", "unknown"),
+                    },
+                },
+                default=str,
+            )
+
+        subagent_name = action["subagent"]
+        subagent_input = action.get("input", {})
+
+        return _json.dumps(
+            {
+                "action": "CALL_TASK",
+                "instruction": (
+                    f"Call task(subagent_type='{subagent_name}', "
+                    f"description='{subagent_input.get('description', subagent_name)}') "
+                    f"with input: {_json.dumps(subagent_input, default=str)}"
+                ),
+                "subagent": subagent_name,
+                "subagent_input": subagent_input,
+                "state_json": _json.dumps(state, default=str),
+            },
+            default=str,
+        )
+
+    return pipeline_tool
 
 
 def create_orchestrator(
@@ -336,7 +455,7 @@ def create_orchestrator(
 ) -> CompiledStateGraph:
     """Create the main uni-dev orchestrator agent.
 
-    Wires the deterministic M5 pipeline graph as a CompiledSubAgent
+    Wires the deterministic pipeline as run_pipeline_loop tool
     and registers 5 LLM sub-agents for the DDD→SDD→TDD pipeline.
 
     Args:
@@ -385,6 +504,14 @@ def create_orchestrator(
     if monitor_db_path is not None:
         middleware.append(MonitorMiddleware(db_path=monitor_db_path))
 
+    pipeline_tool = _make_pipeline_tool(sub_agents, kb_path=".uni-kb")
+    pipeline_tool.__name__ = "run_pipeline_loop"
+    pipeline_tool.__doc__ = (
+        "Run the full DDD→SDD→TDD→Verify pipeline for a given issue. "
+        "Handles domain design, spec writing, test generation, code "
+        "implementation, verification, and review automatically."
+    )
+
     return create_deep_agent(
         model=orchestrator_model,
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
@@ -392,4 +519,5 @@ def create_orchestrator(
         middleware=middleware if middleware else (),
         skills=skills,
         memory=memory,
+        tools=[pipeline_tool],
     )
