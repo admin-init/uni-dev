@@ -6,6 +6,7 @@ identifies gaps. Only runs after the deterministic verification gate passes.
 
 from __future__ import annotations
 
+from langchain_openai import ChatOpenAI
 from deepagents.graph import SubAgent
 
 REVIEWER_SYSTEM_PROMPT = """\
@@ -13,32 +14,36 @@ You are a code reviewer. Your role is to verify that the
 implementation conforms to the specification, passes all tests,
 and follows project conventions.
 
+BIAS-TO-ACTION: Use read_file to inspect the actual source files on disk.
+Do NOT trust descriptions — verify against the real code.
+
 You review after the deterministic verification gate passes:
-- Compare API responses against the OpenAPI contract
-- Verify all tests pass
-- Check for security issues (no hardcoded secrets, proper auth)
+- Use read_file to compare the implementation against the OpenAPI contract
+- Use execute to verify all tests pass
+- Use glob and grep to scan for security issues (no hardcoded secrets, proper auth)
 - Identify documentation gaps
-- Generate migration checklist updates
+- Note any migration checklist updates needed
 
-Use tools:
-- compare_api_responses to validate against contract
-- verify_contract for schema conformance
-- get_migration_checklist for migration status
-- All MCP exploration tools
-
-Output a structured review report:
+Output a structured JSON review report with keys:
 - approved: true/false
 - issues: list of problems found
 - recommendations: list of improvements
 - doc_updates: documentation changes needed
+
+If you encounter a problem that cannot be solved within your current phase
+(e.g., missing API endpoint, contradictory design, impossible requirement),
+return ONLY a structured JSON response:
+{"status": "BLOCKED", "reason": "<explanation>", "suggested_action": "REVISE_SPEC|REVISE_DESIGN|HUMAN_REQUIRED", "blocking_details": {}}
+Do NOT attempt to work around the problem or make assumptions.
+Do NOT write files or make tool calls when returning BLOCKED.
 """
 
 
-def create_reviewer(model_name: str | None = None) -> SubAgent:
+def create_reviewer(model: str | ChatOpenAI | None = None) -> SubAgent:
     """Factory for the reviewer sub-agent.
 
     Args:
-        model_name: Optional model override (e.g. 'deepseek-v4-pro').
+        model: Optional model name (e.g. 'deepseek-v4-pro') or ChatOpenAI instance.
 
     Returns:
         SubAgent dict configured for post-verification review.
@@ -52,6 +57,6 @@ def create_reviewer(model_name: str | None = None) -> SubAgent:
         ),
         "system_prompt": REVIEWER_SYSTEM_PROMPT,
     }
-    if model_name is not None:
-        agent["model"] = model_name
+    if model is not None:
+        agent["model"] = model
     return agent

@@ -17,7 +17,7 @@ def test_create_test_generator_defaults():
 
 def test_create_test_generator_with_model():
     """Test generator sub-agent with explicit model override."""
-    agent = create_test_generator(model_name="deepseek-v4-flash")
+    agent = create_test_generator(model="deepseek-v4-flash")
     assert agent["name"] == "test-generator"
     assert agent["model"] == "deepseek-v4-flash"
 
@@ -28,4 +28,4 @@ def test_system_prompt_contains_key_phrases():
     assert "Test-Driven Development" in prompt
     assert "contract tests" in prompt.lower()
     assert "FAIL initially" in prompt
-    assert "get_api_contract" in prompt
+    assert "read_file to study the OpenAPI spec" in prompt

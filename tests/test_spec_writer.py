@@ -17,7 +17,7 @@ def test_create_spec_writer_defaults():
 
 def test_create_spec_writer_with_model():
     """Spec writer sub-agent with explicit model override."""
-    agent = create_spec_writer(model_name="deepseek-v4-flash")
+    agent = create_spec_writer(model="deepseek-v4-flash")
     assert agent["name"] == "spec-writer"
     assert agent["model"] == "deepseek-v4-flash"
 
@@ -28,4 +28,4 @@ def test_system_prompt_contains_key_phrases():
     assert "OpenAPI 3.0" in prompt
     assert "source of truth" in prompt
     assert "bearerAuth" in prompt
-    assert "Knowledge Base" in prompt
+    assert "Specification-Driven Development" in prompt

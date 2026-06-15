@@ -1,16 +1,14 @@
-"""Tests for core/graph.py — compiled StateGraph wiring and LLM agent nodes."""
+"""Tests for core/graph.py — compiled StateGraph with instruction-producing nodes."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 
 from uni_dev.core.graph import (
     UniDevState,
     _code_generator_node,
-    _create_node_model,
     _domain_designer_node,
-    _extract_code_block,
-    _parse_file_paths,
+    _last_message_text,
     _reviewer_node,
     _spec_writer_node,
     _test_generator_node,
@@ -18,10 +16,10 @@ from uni_dev.core.graph import (
 )
 
 
-def test_uni_dev_state_typed_dict():
-    """UniDevState can be instantiated with all fields including new optional ones."""
+def _base_state(**overrides):
+    """Create a base UniDevState for testing."""
     state: UniDevState = {
-        "messages": [],
+        "messages": [HumanMessage(content="Add user avatar upload")],
         "classification": "add_feature",
         "attempt_count": 0,
         "test_results": {"pass": False, "failures": [], "output": ""},
@@ -29,19 +27,28 @@ def test_uni_dev_state_typed_dict():
         "migration_plan": [],
         "current_phase": "ddd",
         "kb_path": "/tmp/.uni-dev",
-        "domain_model": {},
-        "api_spec": "",
-        "test_files": [],
-        "modified_files": [],
-        "review_report": {},
     }
-    assert state["classification"] == "add_feature"
-    assert state["attempt_count"] == 0
-    assert state["current_phase"] == "ddd"
+    state.update(overrides)
+    return state
 
 
-def test_uni_dev_state_minimal_fields():
-    """UniDevState with only required fields (optional ones omitted)."""
+# State schema tests
+def test_uni_dev_state_has_new_fields():
+    """UniDevState accepts next_action, blockers, escalation_history, status."""
+    state = _base_state(
+        next_action={"type": "CALL_SUBAGENT", "subagent": "domain-designer"},
+        blockers=[{"reason": "test", "suggested_action": "HUMAN_REQUIRED"}],
+        escalation_history=["ddd->SpecWriter"],
+        status="pass",
+    )
+    assert state["next_action"]["subagent"] == "domain-designer"
+    assert state["blockers"][0]["reason"] == "test"
+    assert len(state["escalation_history"]) == 1
+    assert state["status"] == "pass"
+
+
+def test_uni_dev_state_minimal():
+    """UniDevState with only required fields."""
     state: UniDevState = {
         "messages": [],
         "classification": "refactor",
@@ -55,290 +62,194 @@ def test_uni_dev_state_minimal_fields():
     assert state["classification"] == "refactor"
 
 
+# Domain designer node tests
+def test_domain_designer_produces_instruction_when_empty():
+    """First call produces CALL_SUBAGENT instruction."""
+    state = _base_state()
+    result = _domain_designer_node(state)
+    assert result["next_action"]["type"] == "CALL_SUBAGENT"
+    assert result["next_action"]["subagent"] == "domain-designer"
+    assert result["current_phase"] == "spec_write"
+
+
+def test_domain_designer_skips_when_done():
+    """Second call skips when domain_model exists."""
+    state = _base_state(domain_model={"entities": ["User"]})
+    result = _domain_designer_node(state)
+    assert result == {"current_phase": "spec_write"}
+    assert "next_action" not in result
+
+
+# Spec writer node tests
+def test_spec_writer_produces_instruction_when_empty():
+    """First call produces CALL_SUBAGENT for spec-writer."""
+    state = _base_state(domain_model={"entities": ["User"]})
+    result = _spec_writer_node(state)
+    assert result["next_action"]["subagent"] == "spec-writer"
+    assert not result["next_action"]["input"]["revision_mode"]
+
+
+def test_spec_writer_skips_when_done():
+    """Skips when api_spec exists."""
+    state = _base_state(api_spec="openapi: 3.0.0")
+    result = _spec_writer_node(state)
+    assert result == {"current_phase": "test_gen"}
+
+
+def test_spec_writer_revises_on_revise_spec_blocker():
+    """Produces instruction with revision_mode=True when blockers contain REVISE_SPEC."""
+    state = _base_state(
+        api_spec="openapi: 3.0.0",
+        blockers=[{"reason": "missing endpoint", "suggested_action": "REVISE_SPEC"}],
+    )
+    result = _spec_writer_node(state)
+    assert result["next_action"]["input"]["revision_mode"] is True
+    assert result["next_action"]["input"]["existing_spec"] == "openapi: 3.0.0"
+
+
+# Test generator node tests
+def test_test_generator_produces_instruction_when_empty():
+    """First call produces CALL_SUBAGENT for test-generator."""
+    state = _base_state(api_spec="openapi: 3.0.0")
+    result = _test_generator_node(state)
+    assert result["next_action"]["subagent"] == "test-generator"
+
+
+def test_test_generator_skips_when_done():
+    """Skips when test_files exist."""
+    state = _base_state(test_files=["test_api.py"])
+    result = _test_generator_node(state)
+    assert result == {"current_phase": "code_gen"}
+
+
+# Code generator node tests
+def test_code_generator_produces_instruction_when_empty():
+    """First call produces CALL_SUBAGENT for code-generator."""
+    state = _base_state(api_spec="...", test_files=["test_x.py"])
+    result = _code_generator_node(state)
+    assert result["next_action"]["subagent"] == "code-generator"
+    assert not result["next_action"]["input"]["retry"]
+
+
+def test_code_generator_skips_when_done_and_passing():
+    """Skips when modified_files exist and tests pass."""
+    state = _base_state(
+        modified_files=["src/app.py"],
+        test_results={"pass": True, "failures": [], "output": "OK"},
+    )
+    result = _code_generator_node(state)
+    assert result == {"current_phase": "verify"}
+
+
+def test_code_generator_retry_on_failure():
+    """Retries when tests fail — returns instruction with retry=True."""
+    state = _base_state(
+        modified_files=["src/app.py"],
+        test_results={"pass": False, "failures": ["test_login"], "output": "FAIL"},
+    )
+    result = _code_generator_node(state)
+    assert result["next_action"]["input"]["retry"] is True
+    assert "test_login" in result["next_action"]["input"]["failures"]
+
+
+# Reviewer node tests
+def test_reviewer_produces_instruction_when_empty():
+    """First call produces CALL_SUBAGENT for reviewer."""
+    state = _base_state(
+        api_spec="...",
+        modified_files=["src/app.py"],
+        test_results={"pass": True, "failures": [], "output": "OK"},
+    )
+    result = _reviewer_node(state)
+    assert result["next_action"]["subagent"] == "reviewer"
+
+
+def test_reviewer_skips_when_done():
+    """Skips when review_report exists."""
+    state = _base_state(review_report={"approved": True})
+    result = _reviewer_node(state)
+    assert result == {"current_phase": "done"}
+
+
+# Graph wiring tests
 def test_build_graph_returns_compiled_graph():
     """build_graph returns a compiled graph with expected attributes."""
     graph = build_graph()
-    assert graph is not None
+    assert hasattr(graph, "invoke")
+    assert hasattr(graph, "get_graph")
 
 
-def test_build_graph_has_required_nodes():
-    """The compiled graph contains all 4 deterministic core nodes."""
+def test_graph_has_escalation_router_node():
+    """The compiled graph includes the EscalationRouter node."""
     graph = build_graph()
-    graph_dict = graph.get_graph()
-    node_names = set(graph_dict.nodes)
-    required = {
-        "classification_router",
-        "verification_gate",
-        "retry_controller",
-        "migration_stepper",
-    }
-    assert required.issubset(node_names), f"Missing nodes: {required - node_names}"
+    node_names = list(graph.get_graph().nodes.keys())
+    assert "EscalationRouter" in node_names
 
 
-def test_build_graph_has_llm_agent_nodes():
-    """The compiled graph contains all 5 LLM agent nodes."""
+def test_graph_has_all_instruction_nodes():
+    """The compiled graph includes all 5 instruction-producing nodes."""
     graph = build_graph()
-    graph_dict = graph.get_graph()
-    node_names = set(graph_dict.nodes)
-    required = {
-        "DomainDesigner",
-        "SpecWriter",
-        "TestGenerator",
-        "CodeGenerator",
-        "Reviewer",
-    }
-    assert required.issubset(node_names), f"Missing nodes: {required - node_names}"
+    node_names = list(graph.get_graph().nodes.keys())
+    for name in ("DomainDesigner", "SpecWriter", "TestGenerator", "CodeGenerator", "Reviewer"):
+        assert name in node_names
 
 
-def test_extract_code_block_yaml():
-    """Extract YAML content from a markdown code fence."""
-    raw = "Some text\n```yaml\nkey: value\n```\nMore text"
-    result = _extract_code_block(raw, "yaml")
-    assert result == "key: value"
+def test_graph_has_deterministic_core_nodes():
+    """The compiled graph includes all deterministic core nodes."""
+    graph = build_graph()
+    node_names = list(graph.get_graph().nodes.keys())
+    for name in ("classification_router", "verification_gate", "retry_controller"):
+        assert name in node_names
 
 
-def test_extract_code_block_json():
-    """Extract JSON content from a markdown code fence."""
-    raw = '```json\n{"approved": true}\n```'
-    result = _extract_code_block(raw, "json")
-    assert result == '{"approved": true}'
-
-
-def test_extract_code_block_no_language():
-    """Extract content from a code fence without language tag."""
-    raw = "```\nsome code\n```"
-    result = _extract_code_block(raw)
-    assert result == "some code"
-
-
-def test_extract_code_block_no_fence():
-    """Return raw content when no code fence is present."""
-    raw = "plain text output"
-    result = _extract_code_block(raw)
-    assert result == "plain text output"
-
-
-def test_parse_file_paths_extracts_source_paths():
-    """Parse file paths from text with various prefixes."""
-    text = (
-        "### Files\n"
-        "- src/app/routes.py\n"
-        "* tests/test_routes.py\n"
-        "  - src/models/user.py\n"
-        "  * src/services/auth.py\n"
+def test_graph_invoke_with_full_state_runs_to_completion():
+    """Graph runs to completion when state has all required fields filled."""
+    graph = build_graph()
+    state = _base_state(
+        classification="add_feature",
+        domain_model={"entities": ["User"]},
+        api_spec="openapi: 3.0.0",
+        test_files=["tests/test_user.py"],
+        modified_files=["src/user.py"],
+        test_results={"pass": True, "failures": [], "output": "OK"},
     )
-    paths = _parse_file_paths(text)
-    assert "src/app/routes.py" in paths
-    assert "tests/test_routes.py" in paths
-    assert "src/models/user.py" in paths
-    assert "src/services/auth.py" in paths
+    result = graph.invoke(state)
+    assert result.get("current_phase") == "done"
 
 
-def test_parse_file_paths_ignores_non_paths():
-    """Non-file-path lines are excluded."""
-    text = "This is a description\n- src/main.py\nAnother sentence"
-    paths = _parse_file_paths(text)
-    assert paths == ["src/main.py"]
+def test_graph_no_llm_in_node_source():
+    """Instruction-producing nodes have no LLM imports or API calls."""
+    import inspect
+    for func in (
+        _domain_designer_node,
+        _spec_writer_node,
+        _test_generator_node,
+        _code_generator_node,
+        _reviewer_node,
+    ):
+        source = inspect.getsource(func)
+        assert "ChatOpenAI" not in source
+        assert "invoke(" not in source
+        assert ".invoke" not in source
 
 
-def test_domain_designer_node_returns_domain_model():
-    """DDD node invokes LLM and returns domain_model state update."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="""\
-```yaml
-bounded_contexts:
-  - name: UserManagement
-entities:
-  - name: User
-    attributes:
-      - id
-      - name
-```""")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [HumanMessage(content="Add user avatar upload endpoint")],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "ddd",
-            "kb_path": "",
-        }
-        result = _domain_designer_node(state)
-    assert "domain_model" in result
-    assert result["domain_model"]["bounded_contexts"][0]["name"] == "UserManagement"
-    assert result["current_phase"] == "sdd"
-    assert len(result["messages"]) == 1
+def test_last_message_text():
+    """_last_message_text extracts from HumanMessage."""
+    state = _base_state()
+    text = _last_message_text(state)
+    assert text == "Add user avatar upload"
 
 
-def test_spec_writer_node_returns_api_spec():
-    """SDD node invokes LLM and returns api_spec state update."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="""\
-```yaml
-openapi: 3.0.0
-info:
-  title: Test API
-paths:
-  /users:
-    get:
-      summary: List users
-```""")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "sdd",
-            "kb_path": "",
-            "domain_model": {"bounded_contexts": [{"name": "UserManagement"}]},
-        }
-        result = _spec_writer_node(state)
-    assert result["api_spec"].startswith("openapi: 3.0.0")
-    assert result["current_phase"] == "tdd"
-
-
-def test_test_generator_node_returns_test_files():
-    """TDD test generator node invokes LLM and returns test_files list."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="""\
-### Test Files
-- tests/test_users.py
-- tests/test_auth.py
-- tests/test_profiles.py
-""")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "tdd",
-            "kb_path": "",
-            "api_spec": "openapi: 3.0.0\npaths: {}",
-        }
-        result = _test_generator_node(state)
-    assert len(result["test_files"]) == 3
-    assert "tests/test_users.py" in result["test_files"]
-
-
-def test_code_generator_node_returns_modified_files():
-    """TDD code generator node invokes LLM and returns modified_files and test_results."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="""\
-### Files
-- src/routes/users.py
-- src/services/user_service.py
-""")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "tdd",
-            "kb_path": "",
-            "api_spec": "openapi: 3.0.0",
-            "test_files": ["tests/test_users.py"],
-        }
-        result = _code_generator_node(state)
-    assert len(result["modified_files"]) == 2
-    assert result["test_results"]["pass"] is True
-
-
-def test_reviewer_node_returns_review_report():
-    """Reviewer node invokes LLM and returns review_report state update."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="""\
-```json
-{"approved": true, "issues": [], "recommendations": [], "doc_updates": []}
-```""")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {"pass": True, "failures": []},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "done",
-            "kb_path": "",
-            "api_spec": "openapi: 3.0.0",
-            "modified_files": ["src/routes/users.py"],
-        }
-        result = _reviewer_node(state)
-    assert result["review_report"]["approved"] is True
-
-
-def test_domain_designer_node_fallback_on_bad_yaml():
-    """DDD node stores raw_output when YAML parsing fails."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="Just some unstructured text")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [HumanMessage(content="Fix bug in login")],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "ddd",
-            "kb_path": "",
-        }
-        result = _domain_designer_node(state)
-    assert "domain_model" in result
-    assert "raw_output" in result["domain_model"]
-
-
-def test_reviewer_node_fallback_on_bad_json():
-    """Reviewer node returns default approved=True on JSON parse failure."""
-    mock_model = MagicMock()
-    mock_model.invoke.return_value = AIMessage(content="Not JSON at all")
-    with patch("uni_dev.core.graph._create_node_model", return_value=mock_model):
-        state: UniDevState = {
-            "messages": [],
-            "classification": "add_feature",
-            "attempt_count": 0,
-            "test_results": {"pass": True, "failures": []},
-            "migration_idx": 0,
-            "migration_plan": [],
-            "current_phase": "done",
-            "kb_path": "",
-            "api_spec": "openapi: 3.0.0",
-            "modified_files": [],
-        }
-        result = _reviewer_node(state)
-    assert result["review_report"]["approved"] is True
-    assert "raw_output" in result["review_report"]
-
-
-def test_create_node_model_v4_pro():
-    """_create_node_model for domain_designer sets reasoning_effort and thinking."""
-    with patch("uni_dev.core.graph._get_api_key", return_value="sk-test"):
-        with patch("uni_dev.core.graph.ChatOpenAI") as mock_chat:
-            _create_node_model("domain_designer")
-    call_kwargs = mock_chat.call_args.kwargs
-    assert call_kwargs["model"] == "deepseek-v4-pro"
-    assert call_kwargs["temperature"] == 0.3
-    assert call_kwargs["reasoning_effort"] == "high"
-    assert call_kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
-
-
-def test_create_node_model_v4_flash():
-    """_create_node_model for spec_writer uses flash model without extras."""
-    with patch("uni_dev.core.graph._get_api_key", return_value="sk-test"):
-        with patch("uni_dev.core.graph.ChatOpenAI") as mock_chat:
-            _create_node_model("spec_writer")
-    call_kwargs = mock_chat.call_args.kwargs
-    assert call_kwargs["model"] == "deepseek-v4-flash"
-    assert call_kwargs["temperature"] == 0.1
-    assert "reasoning_effort" not in call_kwargs
-    assert "extra_body" not in call_kwargs
+def test_last_message_text_empty():
+    """_last_message_text returns empty string when no messages."""
+    state: UniDevState = {
+        "messages": [],
+        "classification": "",
+        "attempt_count": 0,
+        "test_results": {},
+        "migration_idx": 0,
+        "migration_plan": [],
+        "current_phase": "",
+        "kb_path": "",
+    }
+    assert _last_message_text(state) == ""

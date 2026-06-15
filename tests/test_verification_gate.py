@@ -46,6 +46,33 @@ def test_verification_gate_does_not_modify_state():
     assert state == original
 
 
+def test_verification_gate_blocked_on_blockers():
+    """Given state with blockers, expect 'blocked'."""
+    state = {
+        "blockers": [{"reason": "API not found", "suggested_action": "REVISE_SPEC"}],
+        "test_results": {"pass": True, "failures": [], "output": ""},
+    }
+    result = verification_gate(state)
+    assert result == {"status": "blocked"}
+
+
+def test_verification_gate_blockers_take_priority_over_fail():
+    """Blockers take priority — even with failing tests, return blocked."""
+    state = {
+        "blockers": [{"reason": "spec missing"}],
+        "test_results": {"pass": False, "failures": ["test_x"], "output": ""},
+    }
+    result = verification_gate(state)
+    assert result == {"status": "blocked"}
+
+
+def test_verification_gate_blockers_priority_over_missing_tests():
+    """Blockers take priority over missing test_results."""
+    state = {"blockers": [{"reason": "spec missing"}]}
+    result = verification_gate(state)
+    assert result == {"status": "blocked"}
+
+
 def test_verification_gate_no_llm():
     """Verification gate is pure Python — no LLM imports or API calls."""
     import inspect

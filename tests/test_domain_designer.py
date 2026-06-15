@@ -17,7 +17,7 @@ def test_create_domain_designer_defaults():
 
 def test_create_domain_designer_with_model():
     """Domain designer sub-agent with explicit model override."""
-    agent = create_domain_designer(model_name="deepseek-v4-pro")
+    agent = create_domain_designer(model="deepseek-v4-pro")
     assert agent["name"] == "domain-designer"
     assert agent["model"] == "deepseek-v4-pro"
 
@@ -30,4 +30,4 @@ def test_system_prompt_contains_key_phrases():
     assert "entities" in prompt
     assert "aggregates" in prompt
     assert "value objects" in prompt
-    assert "Knowledge Base" in prompt
+    assert "Do NOT trust your memory" in prompt

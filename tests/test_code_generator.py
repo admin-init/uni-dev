@@ -17,7 +17,7 @@ def test_create_code_generator_defaults():
 
 def test_create_code_generator_with_model():
     """Code generator sub-agent with explicit model override."""
-    agent = create_code_generator(model_name="deepseek-v4-flash")
+    agent = create_code_generator(model="deepseek-v4-flash")
     assert agent["name"] == "code-generator"
     assert agent["model"] == "deepseek-v4-flash"
 

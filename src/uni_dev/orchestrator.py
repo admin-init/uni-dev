@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 from deepagents import create_deep_agent
-from deepagents.graph import CompiledSubAgent, SubAgent
+from deepagents.graph import SubAgent
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 
@@ -21,7 +21,6 @@ from uni_dev.agents.domain_designer import create_domain_designer
 from uni_dev.agents.reviewer import create_reviewer
 from uni_dev.agents.spec_writer import create_spec_writer
 from uni_dev.agents.test_generator import create_test_generator
-from uni_dev.core.graph import build_graph
 from uni_dev.monitoring import MonitorMiddleware
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,7 @@ def _get_api_key() -> str:
 
 
 def _create_model(
-    model_name: str,
+    model: str,
     base_url: str,
     api_key: str,
     temperature: float = 0.0,
@@ -94,7 +93,7 @@ def _create_model(
     """Create a ChatOpenAI model configured for DeepSeek.
 
     Args:
-        model_name: Model identifier (deepseek-v4-pro or deepseek-v4-flash).
+        model: Model identifier (deepseek-v4-pro or deepseek-v4-flash).
         base_url: API base URL.
         api_key: API key.
         temperature: Sampling temperature.
@@ -111,7 +110,7 @@ def _create_model(
         kwargs["extra_body"] = {"thinking": thinking}
 
     return ChatOpenAI(
-        model=model_name,
+        model=model,
         base_url=base_url,
         api_key=api_key,
         temperature=temperature,
@@ -122,7 +121,7 @@ def _create_model(
 def _build_sub_agents(
     base_url: str,
     api_key: str,
-) -> list[SubAgent | CompiledSubAgent]:
+) -> list[SubAgent]:
     """Build the list of sub-agents for the orchestrator.
 
     Args:
@@ -130,12 +129,12 @@ def _build_sub_agents(
         api_key: DeepSeek API key.
 
     Returns:
-        List of SubAgent and CompiledSubAgent specs.
+        List of SubAgent specs.
     """
-    sub_agents: list[SubAgent | CompiledSubAgent] = []
+    sub_agents: list[SubAgent] = []
 
     domain_model = _create_model(
-        model_name=_MODEL_MAP["domain_designer"],
+        model=_MODEL_MAP["domain_designer"],
         base_url=base_url,
         api_key=api_key,
         temperature=_MODEL_TEMPERATURE_MAP["domain_designer"],
@@ -143,64 +142,166 @@ def _build_sub_agents(
         thinking={"type": "enabled"},
     )
     sub_agents.append(
-        create_domain_designer(model_name=domain_model)  # type: ignore[arg-type]
+        create_domain_designer(model=domain_model)
     )
 
     spec_model = _create_model(
-        model_name=_MODEL_MAP["spec_writer"],
+        model=_MODEL_MAP["spec_writer"],
         base_url=base_url,
         api_key=api_key,
         temperature=_MODEL_TEMPERATURE_MAP["spec_writer"],
     )
     sub_agents.append(
-        create_spec_writer(model_name=spec_model)  # type: ignore[arg-type]
+        create_spec_writer(model=spec_model)
     )
 
     test_model = _create_model(
-        model_name=_MODEL_MAP["test_generator"],
+        model=_MODEL_MAP["test_generator"],
         base_url=base_url,
         api_key=api_key,
         temperature=_MODEL_TEMPERATURE_MAP["test_generator"],
     )
     sub_agents.append(
-        create_test_generator(model_name=test_model)  # type: ignore[arg-type]
+        create_test_generator(model=test_model)  # type: ignore[arg-type]
     )
 
     code_model = _create_model(
-        model_name=_MODEL_MAP["code_generator"],
+        model=_MODEL_MAP["code_generator"],
         base_url=base_url,
         api_key=api_key,
         temperature=_MODEL_TEMPERATURE_MAP["code_generator"],
     )
     sub_agents.append(
-        create_code_generator(model_name=code_model)  # type: ignore[arg-type]
+        create_code_generator(model=code_model)  # type: ignore[arg-type]
     )
 
     reviewer_model = _create_model(
-        model_name=_MODEL_MAP["reviewer"],
+        model=_MODEL_MAP["reviewer"],
         base_url=base_url,
         api_key=api_key,
         temperature=_MODEL_TEMPERATURE_MAP["reviewer"],
         thinking={"type": "enabled"},
     )
     sub_agents.append(
-        create_reviewer(model_name=reviewer_model)  # type: ignore[arg-type]
-    )
-
-    pipeline_graph = build_graph()
-    sub_agents.append(
-        CompiledSubAgent(
-            name="pipeline-controller",
-            description=(
-                "Deterministic workflow controller. Handles verification, "
-                "retry, classification routing, and migration stepping. "
-                "This is the non-overridable backbone."
-            ),
-            runnable=pipeline_graph,
-        )
+        create_reviewer(model=reviewer_model)  # type: ignore[arg-type]
     )
 
     return sub_agents
+
+
+MAX_LOOP_ITERATIONS = 50
+
+
+def _merge_subagent_output(
+    state: dict[str, Any],
+    subagent_name: str,
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge sub-agent output into the pipeline state.
+
+    Maps agent output to the correct state field based on agent name.
+    The raw dict comes from the SubAgent's structured output.
+
+    Args:
+        state: Current UniDevState dict.
+        subagent_name: Name of the sub-agent that produced the output.
+        raw: Raw result dict from the sub-agent.
+
+    Returns:
+        Updated state dict.
+    """
+    result = raw.get("result", raw)
+
+    if subagent_name == "domain-designer":
+        state["domain_model"] = result if isinstance(result, dict) else {"raw_output": str(result)}
+    elif subagent_name == "spec-writer":
+        state["api_spec"] = result if isinstance(result, str) else str(result)
+    elif subagent_name == "test-generator":
+        if isinstance(result, dict) and "test_files" in result:
+            state["test_files"] = result["test_files"]
+        elif isinstance(result, list):
+            state["test_files"] = [str(f) for f in result]
+        else:
+            state["test_files"] = [str(result)]
+    elif subagent_name == "code-generator":
+        if isinstance(result, dict):
+            state["modified_files"] = result.get("modified_files", result.get("files", []))
+            if "test_results" in result:
+                state["test_results"] = result["test_results"]
+        else:
+            state["modified_files"] = [str(result)]
+    elif subagent_name == "reviewer":
+        state["review_report"] = result if isinstance(result, dict) else {"raw_output": str(result)}
+
+    return state
+
+
+def run_pipeline_loop(
+    initial_state: dict[str, Any],
+    sub_agents: list[SubAgent],
+    task_fn: Any = None,
+) -> dict[str, Any]:
+    """Re-entrant pipeline loop — drives the graph as a state machine.
+
+    Registered as a tool on the deepagent. When running inside the
+    deepagent runtime, task() is available from the tool context.
+    For testing, pass a mock via task_fn.
+
+    Loop:
+    1. graph.invoke(state) → returns instruction via next_action
+    2. If COMPLETE → return final state
+    3. task(subagent, input) → execute LLM sub-agent with full tools
+    4. Detect BLOCKED or merge result → loop
+
+    Args:
+        initial_state: Initial UniDevState dict with messages and classification.
+        sub_agents: List of SubAgent dicts from _build_sub_agents().
+        task_fn: Optional task function for sub-agent delegation. When None,
+            imports from deepagents at runtime. Primarily for testing.
+
+    Returns:
+        Final state dict containing all pipeline outputs.
+
+    Raises:
+        RuntimeError: If loop exceeds MAX_LOOP_ITERATIONS.
+    """
+    from uni_dev.core.graph import build_graph
+
+    if task_fn is None:
+        from deepagents import task as _task
+        task_fn = _task
+
+    state = dict(initial_state)
+    graph = build_graph()
+    iterations = 0
+
+    while iterations < MAX_LOOP_ITERATIONS:
+        iterations += 1
+
+        result = graph.invoke(state)
+        state.update(result)
+
+        action = state.get("next_action")
+        if not action or action.get("type") == "COMPLETE":
+            return state
+
+        subagent_name = action["subagent"]
+        subagent_input = action.get("input", {})
+
+        raw = task_fn(subagent_name, description=subagent_input.get("description", subagent_name), **subagent_input)
+
+        if isinstance(raw, dict) and raw.get("status") == "BLOCKED":
+            blockers = state.get("blockers", [])
+            blockers.append(raw)
+            state["blockers"] = blockers
+        else:
+            state = _merge_subagent_output(state, subagent_name, raw if isinstance(raw, dict) else {"result": raw})
+
+        state.pop("next_action", None)
+
+    raise RuntimeError(
+        f"Pipeline loop exceeded {MAX_LOOP_ITERATIONS} iterations"
+    )
 
 
 ORCHESTRATOR_SYSTEM_PROMPT = """\
@@ -219,14 +320,11 @@ Defer to deterministic nodes (verification, retry, routing) — do not override 
 
 Pipeline:
 1. Classify the issue (add_feature, update_api, remove_feature, refactor)
-2. Delegate to domain-designer for DDD analysis
-3. Delegate to spec-writer for OpenAPI contracts
-4. Delegate to test-generator for test creation
-5. Delegate to code-generator for implementation
-6. Deterministic verification gate checks results
-7. Delegate to reviewer for final review and documentation
+2. Call run_pipeline_loop with the initial state — it handles the full DDD→SDD→TDD→Verify pipeline automatically
+3. Review the final state and report results to the user
 
-For each step, use the task() tool to delegate to the appropriate sub-agent.
+For deterministic pipeline execution, use the run_pipeline_loop tool.
+For individual phase work, use task() to delegate to sub-agents directly.
 """
 
 
@@ -263,7 +361,7 @@ def create_orchestrator(
     )
 
     orchestrator_model = _create_model(
-        model_name=_MODEL_MAP["orchestrator"],
+        model=_MODEL_MAP["orchestrator"],
         base_url=resolved_base_url,
         api_key=resolved_api_key,
         temperature=_MODEL_TEMPERATURE_MAP["orchestrator"],
@@ -278,6 +376,11 @@ def create_orchestrator(
     )
     skills = [str(skills_path)] if skills_path.exists() else []
 
+    agents_md_path = (
+        Path(__file__).resolve().parent.parent.parent.parent / "AGENTS.md"
+    )
+    memory = [str(agents_md_path)] if agents_md_path.exists() else []
+
     middleware = []
     if monitor_db_path is not None:
         middleware.append(MonitorMiddleware(db_path=monitor_db_path))
@@ -288,4 +391,5 @@ def create_orchestrator(
         subagents=sub_agents,
         middleware=middleware if middleware else (),
         skills=skills,
+        memory=memory,
     )
