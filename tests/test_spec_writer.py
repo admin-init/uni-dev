@@ -28,4 +28,4 @@ def test_system_prompt_contains_key_phrases():
     assert "OpenAPI 3.0" in prompt
     assert "source of truth" in prompt
     assert "bearerAuth" in prompt
-    assert "Knowledge Base" in prompt
+    assert "Specification-Driven Development" in prompt

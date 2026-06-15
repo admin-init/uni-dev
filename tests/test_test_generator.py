@@ -28,4 +28,4 @@ def test_system_prompt_contains_key_phrases():
     assert "Test-Driven Development" in prompt
     assert "contract tests" in prompt.lower()
     assert "FAIL initially" in prompt
-    assert "get_api_contract" in prompt
+    assert "read_file to study the OpenAPI spec" in prompt

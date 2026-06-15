@@ -27,6 +27,6 @@ def test_system_prompt_contains_key_phrases():
     prompt = REVIEWER_SYSTEM_PROMPT
     assert "conforms" in prompt.lower()
     assert "security" in prompt.lower()
-    assert "compare_api_responses" in prompt
-    assert "verify_contract" in prompt
+    assert "compare the implementation against the OpenAPI contract" in prompt
+    assert "deterministic verification gate" in prompt
     assert "approved" in prompt

@@ -30,4 +30,4 @@ def test_system_prompt_contains_key_phrases():
     assert "entities" in prompt
     assert "aggregates" in prompt
     assert "value objects" in prompt
-    assert "Knowledge Base" in prompt
+    assert "Do NOT trust your memory" in prompt
