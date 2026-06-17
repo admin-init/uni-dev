@@ -16,11 +16,13 @@ def make_spec_write_node(
     from deepagents.middleware.filesystem import FilesystemMiddleware
 
     from uni_dev.agents.spec_writer import SPEC_WRITER_SYSTEM_PROMPT
+    from uni_dev.middleware import CostTrackingMiddleware, OutputCleanerMiddleware
     from uni_dev.orchestrator import (
         _MODEL_MAP,
         _MODEL_TEMPERATURE_MAP,
         _create_model,
     )
+    from uni_dev.security import SecurityFilterMiddleware
 
     def node(state: dict[str, Any]) -> dict[str, Any]:
         agent = create_deep_agent(
@@ -31,7 +33,12 @@ def make_spec_write_node(
                 temperature=_MODEL_TEMPERATURE_MAP["spec_writer"],
             ),
             system_prompt=SPEC_WRITER_SYSTEM_PROMPT,
-            middleware=[FilesystemMiddleware()],
+            middleware=[
+                FilesystemMiddleware(),
+                OutputCleanerMiddleware(),
+                CostTrackingMiddleware(),
+                SecurityFilterMiddleware(),
+            ],
         )
 
         issue = state.get("issue", "")

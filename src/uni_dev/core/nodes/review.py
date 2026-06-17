@@ -16,11 +16,13 @@ def make_review_node(
     from deepagents.middleware.filesystem import FilesystemMiddleware
 
     from uni_dev.agents.reviewer import REVIEWER_SYSTEM_PROMPT
+    from uni_dev.middleware import CostTrackingMiddleware, OutputCleanerMiddleware
     from uni_dev.orchestrator import (
         _MODEL_MAP,
         _MODEL_TEMPERATURE_MAP,
         _create_model,
     )
+    from uni_dev.security import SecurityFilterMiddleware
 
     def node(state: dict[str, Any]) -> dict[str, Any]:
         agent = create_deep_agent(
@@ -32,7 +34,12 @@ def make_review_node(
                 thinking={"type": "enabled"},
             ),
             system_prompt=REVIEWER_SYSTEM_PROMPT,
-            middleware=[FilesystemMiddleware()],
+            middleware=[
+                FilesystemMiddleware(),
+                OutputCleanerMiddleware(),
+                CostTrackingMiddleware(),
+                SecurityFilterMiddleware(),
+            ],
         )
 
         issue = state.get("issue", "")
