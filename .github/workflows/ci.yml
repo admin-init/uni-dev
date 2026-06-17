@@ -28,4 +28,4 @@ jobs:
       - run: rm -f uv.lock
       - run: uv pip install -e ".[dev]"
         timeout-minutes: 10
-      - run: uv run pytest -v
+      - run: uv run --no-sync pytest -v
