@@ -25,9 +25,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install system build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential
-      - run: uv pip install "uvloop>=0.18.0"
-      - run: uv pip install -e ".[dev]"
+      - run: uv pip install -e ".[dev]" --no-build
         timeout-minutes: 10
       - run: uv run pytest -v
