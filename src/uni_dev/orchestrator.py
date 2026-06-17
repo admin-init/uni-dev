@@ -21,7 +21,9 @@ from uni_dev.agents.domain_designer import create_domain_designer
 from uni_dev.agents.reviewer import create_reviewer
 from uni_dev.agents.spec_writer import create_spec_writer
 from uni_dev.agents.test_generator import create_test_generator
+from uni_dev.middleware import CostTrackingMiddleware, OutputCleanerMiddleware
 from uni_dev.monitoring import MonitorMiddleware
+from uni_dev.security import SecurityFilterMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +275,9 @@ def create_orchestrator(
     middleware = []
     if monitor_db_path is not None:
         middleware.append(MonitorMiddleware(db_path=monitor_db_path))
+    middleware.append(OutputCleanerMiddleware())
+    middleware.append(CostTrackingMiddleware())
+    middleware.append(SecurityFilterMiddleware())
 
     return create_deep_agent(
         model=orchestrator_model,
