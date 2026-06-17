@@ -25,6 +25,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv pip install -e ".[dev]" --no-build
+      - run: rm -f uv.lock
+      - run: uv pip install -e ".[dev]"
         timeout-minutes: 10
       - run: uv run pytest -v
