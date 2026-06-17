@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from uni_dev.core.factory import DEFAULT_CHECKPOINTS_DB, DEFAULT_ISSUES_DB
 from uni_dev.store.issue_store import IssueStore
 
 logger = logging.getLogger("uni_dev.runner")
@@ -23,7 +24,7 @@ class IssueRunner:
 
     def __init__(
         self,
-        issue_db_path: str | Path = ".uni-kb/issues.db",
+        issue_db_path: str | Path = DEFAULT_ISSUES_DB,
         poll_interval_sec: int = _DEFAULT_POLL_INTERVAL,
     ) -> None:
         self._store = IssueStore(issue_db_path)
@@ -92,7 +93,7 @@ class IssueRunner:
 
         try:
             config = PipelineConfig.from_env()
-            checkpointer = SqliteSaver.from_conn_string(".uni-dev/checkpoints.db")
+            checkpointer = SqliteSaver.from_conn_string(DEFAULT_CHECKPOINTS_DB)
             pipeline = compile_pipeline(config=config, checkpointer=checkpointer)
 
             state = {

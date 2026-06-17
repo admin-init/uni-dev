@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 import yaml
 
+DEFAULT_ISSUES_DB = ".uni-kb/issues.db"
+DEFAULT_CHECKPOINTS_DB = ".uni-dev/checkpoints.db"
+DEFAULT_MONITOR_DB = ".uni-kb/monitor.db"
+
 
 @dataclass
 class PipelineConfig:
@@ -12,8 +16,9 @@ class PipelineConfig:
 
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek-v4-flash"
     test_command: str = "pytest"
-    monitor_db_path: str | None = ".uni-kb/monitor.db"
+    monitor_db_path: str | None = DEFAULT_MONITOR_DB
     langsmith_enabled: bool = False
 
     @classmethod

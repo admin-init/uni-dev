@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import logging
 import subprocess
 from typing import Any, Callable
-
-logger = logging.getLogger(__name__)
-
 
 def make_run_tests_node(config: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Create run_tests_node with config baked in."""

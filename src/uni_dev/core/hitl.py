@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from langgraph.types import interrupt
-
-logger = logging.getLogger(__name__)
-
 
 def human_approval_node(state: dict[str, Any]) -> dict[str, Any]:
     """LangGraph interrupt: pauses execution for human decision."""
