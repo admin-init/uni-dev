@@ -1,9 +1,3 @@
-"""IssueRunner — continuous pipeline execution loop.
-
-Polls IssueStore for pending issues and invokes the orchestrator
-in a background thread. Designed to run alongside the TUI.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -78,7 +72,7 @@ class IssueRunner:
             time.sleep(self._poll_interval)
 
     def _process_issue(self, issue: dict[str, Any]) -> dict[str, Any]:
-        """Process a single issue through the orchestrator pipeline.
+        """Process a single issue through the pipeline.
 
         Args:
             issue: Issue dict from IssueStore.
@@ -86,61 +80,39 @@ class IssueRunner:
         Returns:
             Result dict with final status.
         """
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        from uni_dev.core.factory import PipelineConfig
+        from uni_dev.core.graph import compile_pipeline
+
         issue_id = issue["issue_id"]
         logger.info("Processing issue %s: %s", issue_id, issue["title"])
 
         self._store.update_status(issue_id, "running")
 
         try:
-            from uni_dev.orchestrator import create_orchestrator
-
-            orchestrator = create_orchestrator(
-                monitor_db_path=".uni-kb/monitor.db",
-            )
+            config = PipelineConfig.from_env()
+            checkpointer = SqliteSaver.from_conn_string(".uni-dev/checkpoints.db")
+            pipeline = compile_pipeline(config=config, checkpointer=checkpointer)
 
             state = {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": issue.get("body") or issue["title"],
-                        "type": "human",
-                    }
-                ],
-                "classification": issue.get("classification") or "add_feature",
+                "issue": issue.get("body") or issue["title"],
+                "project_path": issue.get("project_path", "."),
+                "classification": issue.get("classification", "add_feature"),
                 "attempt_count": 0,
-                "test_results": {"pass": False, "failures": [], "output": ""},
-                "migration_idx": 0,
-                "migration_plan": [],
-                "current_phase": "ddd",
-                "kb_path": ".uni-kb",
             }
+            thread_config = {"configurable": {"thread_id": issue_id}}
 
-            result = orchestrator.invoke(state)
-            task_runs = result.get("task_runs", [])
-            messages = result.get("messages", [])
+            result = pipeline.invoke(state, thread_config)
 
-            needs_human = False
-            for msg in reversed(messages):
-                content = getattr(msg, "content", "")
-                if "escalate" in str(content).lower():
-                    needs_human = True
-                    break
-
-            if needs_human:
-                self._store.update_status(
-                    issue_id,
-                    "needs_human",
-                    task_runs=task_runs,
-                )
+            review_report = result.get("review_report", "")
+            if not review_report:
+                self._store.update_status(issue_id, "needs_human")
                 logger.info("Issue %s: needs human review", issue_id)
                 return {"status": "needs_human", "issue_id": issue_id}
 
-            self._store.update_status(
-                issue_id,
-                "completed",
-                task_runs=task_runs,
-            )
-            logger.info("Issue %s: completed (%d task runs)", issue_id, len(task_runs))
+            self._store.update_status(issue_id, "completed")
+            logger.info("Issue %s: completed", issue_id)
             return {"status": "completed", "issue_id": issue_id}
 
         except Exception as exc:

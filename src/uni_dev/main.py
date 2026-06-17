@@ -34,14 +34,6 @@ def init(project: str) -> None:
     click.echo("Done.")
 
 
-def _get_checkpointer():
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
-    db_path = Path(".uni-dev/checkpoints.db")
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    return SqliteSaver.from_conn_string(str(db_path))
-
-
 @cli.command()
 @click.argument("issue")
 @click.option(
@@ -53,9 +45,17 @@ def _get_checkpointer():
     "--thread-id", default=None,
     help="Thread ID for checkpointing (auto-generated if omitted).",
 )
-def run(issue: str, classify: str | None, thread_id: str | None) -> None:
+@click.option(
+    "--test-cmd", default=None,
+    help="Test command (default: auto-detect from project).",
+)
+def run(issue: str, classify: str | None, thread_id: str | None, test_cmd: str | None) -> None:
     """Run the DDD->SDD->TDD pipeline for an issue."""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from uni_dev.core.factory import PipelineConfig
     from uni_dev.core.graph import compile_pipeline
+    from uni_dev.core.test_command import resolve_test_command
 
     thread_id = thread_id or uuid.uuid4().hex[:12]
     click.echo(f"Running pipeline for: {issue}")
@@ -63,20 +63,29 @@ def run(issue: str, classify: str | None, thread_id: str | None) -> None:
     if classify:
         click.echo(f"Classification: {classify}")
 
-    checkpointer = _get_checkpointer()
-    pipeline = compile_pipeline(checkpointer=checkpointer)
+    project_path = str(Path.cwd())
+    resolved_test_cmd = resolve_test_command(test_cmd, project_path)
+    click.echo(f"Test command: {resolved_test_cmd}")
+
+    config = PipelineConfig.from_env()
+    config.test_command = resolved_test_cmd
+
+    db_path = Path(".uni-dev/checkpoints.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpointer = SqliteSaver.from_conn_string(str(db_path))
+    pipeline = compile_pipeline(config=config, checkpointer=checkpointer)
 
     state = {
         "issue": issue,
-        "project_path": str(Path.cwd()),
+        "project_path": project_path,
         "classification": classify or "add_feature",
         "attempt_count": 0,
     }
-    config = {"configurable": {"thread_id": thread_id}}
+    config_dict = {"configurable": {"thread_id": thread_id}}
 
     click.echo("Invoking pipeline...")
     try:
-        result = pipeline.invoke(state, config)
+        result = pipeline.invoke(state, config_dict)
         click.echo("\nPipeline completed.")
         click.echo(f"Domain model: {'yes' if result.get('domain_model') else 'no'}")
         click.echo(f"API spec: {'yes' if result.get('api_spec') else 'no'}")
@@ -98,17 +107,24 @@ def run(issue: str, classify: str | None, thread_id: str | None) -> None:
 )
 def resume(thread_id: str, decision: str) -> None:
     """Resume a paused pipeline from checkpoint."""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from uni_dev.core.factory import PipelineConfig
     from uni_dev.core.graph import compile_pipeline
 
-    checkpointer = _get_checkpointer()
-    pipeline = compile_pipeline(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": thread_id}}
+    config = PipelineConfig.from_env()
+
+    db_path = Path(".uni-dev/checkpoints.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpointer = SqliteSaver.from_conn_string(str(db_path))
+    pipeline = compile_pipeline(config=config, checkpointer=checkpointer)
+    config_dict = {"configurable": {"thread_id": thread_id}}
 
     click.echo(f"Resuming pipeline {thread_id} with decision: {decision}")
     try:
         result = pipeline.invoke(
             {"_human_decision": decision},
-            config,
+            config_dict,
         )
         click.echo("\nPipeline resumed and completed.")
         click.echo(f"Review report: {'yes' if result.get('review_report') else 'no'}")
