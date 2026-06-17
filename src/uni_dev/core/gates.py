@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
@@ -15,6 +17,18 @@ def ddd_verification_gate(state: dict[str, Any]) -> dict[str, str]:
     domain = state.get("domain_model", "")
     if not domain:
         return {"_gate_result": "fail"}
+    try:
+        parsed = yaml.safe_load(domain)
+    except yaml.YAMLError:
+        return {"_gate_result": "fail"}
+    if not isinstance(parsed, dict):
+        return {"_gate_result": "fail"}
+    entities = parsed.get("entities")
+    contexts = parsed.get("bounded_contexts")
+    if not entities or not isinstance(entities, list) or len(entities) == 0:
+        return {"_gate_result": "fail"}
+    if not contexts or not isinstance(contexts, list) or len(contexts) == 0:
+        return {"_gate_result": "fail"}
     return {"_gate_result": "pass"}
 
 
@@ -24,6 +38,19 @@ def sdd_verification_gate(state: dict[str, Any]) -> dict[str, str]:
         return {"_gate_result": "fail"}
     spec = state.get("api_spec", "")
     if not spec:
+        return {"_gate_result": "fail"}
+    try:
+        parsed = yaml.safe_load(spec)
+    except yaml.YAMLError:
+        return {"_gate_result": "fail"}
+    if not isinstance(parsed, dict):
+        return {"_gate_result": "fail"}
+    if not parsed.get("openapi"):
+        return {"_gate_result": "fail"}
+    paths = parsed.get("paths")
+    if not paths or not isinstance(paths, dict) or len(paths) == 0:
+        return {"_gate_result": "fail"}
+    if not parsed.get("info"):
         return {"_gate_result": "fail"}
     return {"_gate_result": "pass"}
 
