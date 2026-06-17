@@ -11,7 +11,7 @@ from uni_dev.core.gates import (
 
 class TestDddVerificationGate:
     def test_pass_with_domain_model(self):
-        state = {"domain_model": "entities: [Pet]"}
+        state = {"domain_model": "entities:\n  - Pet\nbounded_contexts:\n  - PetManagement"}
         result = ddd_verification_gate(state)
         assert result["_gate_result"] == "pass"
 
@@ -21,14 +21,19 @@ class TestDddVerificationGate:
         assert result["_gate_result"] == "fail"
 
     def test_fail_with_blockers(self):
-        state = {"domain_model": "entities: [Pet]", "blockers": [{"reason": "x"}]}
+        state = {
+            "domain_model": "entities:\n  - Pet\nbounded_contexts:\n  - PetManagement",
+            "blockers": [{"reason": "x"}],
+        }
         result = ddd_verification_gate(state)
         assert result["_gate_result"] == "fail"
 
 
 class TestSddVerificationGate:
     def test_pass_with_spec(self):
-        state = {"api_spec": "openapi: 3.0"}
+        state = {
+            "api_spec": "openapi: '3.0.0'\ninfo:\n  title: Test\npaths:\n  /pets:\n    get:\n      responses: {}",
+        }
         result = sdd_verification_gate(state)
         assert result["_gate_result"] == "pass"
 
@@ -38,7 +43,10 @@ class TestSddVerificationGate:
         assert result["_gate_result"] == "fail"
 
     def test_fail_with_blockers(self):
-        state = {"api_spec": "openapi: 3.0", "blockers": [{"reason": "x"}]}
+        state = {
+            "api_spec": "openapi: '3.0.0'\ninfo:\n  title: Test\npaths:\n  /pets:\n    get:\n      responses: {}",
+            "blockers": [{"reason": "x"}],
+        }
         result = sdd_verification_gate(state)
         assert result["_gate_result"] == "fail"
 
@@ -86,3 +94,54 @@ class TestRetryController:
 
     def test_max_attempts_constant(self):
         assert MAX_ATTEMPTS == 3
+
+
+class TestDddVerificationGateYaml:
+    def test_valid_yaml(self):
+        state = {"domain_model": "entities:\n  - Pet\nbounded_contexts:\n  - PetManagement"}
+        result = ddd_verification_gate(state)
+        assert result["_gate_result"] == "pass"
+
+    def test_invalid_yaml(self):
+        state = {"domain_model": "not: valid: yaml: ["}
+        result = ddd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+    def test_missing_entities(self):
+        state = {"domain_model": "bounded_contexts:\n  - PetManagement"}
+        result = ddd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+    def test_empty_entities(self):
+        state = {"domain_model": "entities: []\nbounded_contexts:\n  - PetManagement"}
+        result = ddd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+
+class TestSddVerificationGateYaml:
+    def test_valid_openapi(self):
+        state = {
+            "api_spec": "openapi: '3.0.0'\ninfo:\n  title: Test\npaths:\n  /pets:\n    get:\n      responses: {}",
+        }
+        result = sdd_verification_gate(state)
+        assert result["_gate_result"] == "pass"
+
+    def test_invalid_yaml(self):
+        state = {"api_spec": "not: valid: yaml: ["}
+        result = sdd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+    def test_missing_openapi_version(self):
+        state = {"api_spec": "info:\n  title: Test\npaths:\n  /pets:\n    get: {}"}
+        result = sdd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+    def test_missing_paths(self):
+        state = {"api_spec": "openapi: '3.0.0'\ninfo:\n  title: Test"}
+        result = sdd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
+
+    def test_empty_paths(self):
+        state = {"api_spec": "openapi: '3.0.0'\ninfo:\n  title: Test\npaths: {}"}
+        result = sdd_verification_gate(state)
+        assert result["_gate_result"] == "fail"
