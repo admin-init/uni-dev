@@ -1,20 +1,24 @@
 from __future__ import annotations
 
+from uni_dev.core.factory import PipelineConfig
 from uni_dev.core.graph import compile_pipeline
 from uni_dev.core.state import PipelineState
 
 
 class TestCompilePipeline:
-    def test_compiles_without_checkpointer(self):
-        pipeline = compile_pipeline()
+    def test_compiles_with_config(self):
+        config = PipelineConfig(api_key="sk-test")
+        pipeline = compile_pipeline(config)
         assert pipeline is not None
 
     def test_returns_compiled_graph(self):
-        pipeline = compile_pipeline()
+        config = PipelineConfig(api_key="sk-test")
+        pipeline = compile_pipeline(config)
         assert hasattr(pipeline, "invoke")
 
     def test_has_expected_nodes(self):
-        pipeline = compile_pipeline()
+        config = PipelineConfig(api_key="sk-test")
+        pipeline = compile_pipeline(config)
         graph = pipeline.get_graph()
         node_ids = set(graph.nodes.keys())
         expected = {
