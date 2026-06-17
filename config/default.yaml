@@ -41,6 +41,11 @@ pipeline:
   max_retry_attempts: 3
   timeout_per_phase: 300
 
+tracing:
+  enabled: false
+  project: uni-dev
+  api_key_env: LANGCHAIN_API_KEY
+
 kb:
   path: .uni-dev
   mcp_command: ["uv", "run", "uni-kb", "serve"]

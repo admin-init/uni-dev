@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import click
@@ -33,43 +34,87 @@ def init(project: str) -> None:
     click.echo("Done.")
 
 
+def _get_checkpointer():
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    db_path = Path(".uni-dev/checkpoints.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return SqliteSaver.from_conn_string(str(db_path))
+
+
 @cli.command()
 @click.argument("issue")
-@click.option("-m", "--model", default="deepseek-v4-pro", help="Model for the orchestrator.")
-@click.option("-k", "--api-key", envvar="DEEPSEEK_API_KEY", default=None, help="DeepSeek API key.")
-@click.option("-c", "--classify", default=None, type=click.Choice(["add_feature", "update_api", "remove_feature", "refactor"]), help="Issue classification.")
-@click.option("--no-monitor", is_flag=True, default=False, help="Disable the monitor middleware.")
-def run(issue: str, model: str, api_key: str | None, classify: str | None, no_monitor: bool) -> None:
+@click.option(
+    "-c", "--classify", default=None,
+    type=click.Choice(["add_feature", "update_api", "remove_feature", "refactor"]),
+    help="Issue classification.",
+)
+@click.option(
+    "--thread-id", default=None,
+    help="Thread ID for checkpointing (auto-generated if omitted).",
+)
+def run(issue: str, classify: str | None, thread_id: str | None) -> None:
     """Run the DDD->SDD->TDD pipeline for an issue."""
-    from uni_dev.orchestrator import create_orchestrator
+    from uni_dev.core.graph import compile_pipeline
 
+    thread_id = thread_id or uuid.uuid4().hex[:12]
     click.echo(f"Running pipeline for: {issue}")
+    click.echo(f"Thread ID: {thread_id}")
     if classify:
         click.echo(f"Classification: {classify}")
-    monitor_db = None if no_monitor else ".uni-kb/monitor.db"
-    orchestrator = create_orchestrator(api_key=api_key, monitor_db_path=monitor_db)
+
+    checkpointer = _get_checkpointer()
+    pipeline = compile_pipeline(checkpointer=checkpointer)
+
     state = {
-        "messages": [{"role": "user", "content": issue, "type": "human"}],
+        "issue": issue,
+        "project_path": str(Path.cwd()),
         "classification": classify or "add_feature",
         "attempt_count": 0,
-        "test_results": {"pass": False, "failures": [], "output": ""},
-        "migration_idx": 0,
-        "migration_plan": [],
-        "current_phase": "ddd",
-        "kb_path": ".uni-kb",
     }
-    click.echo("Invoking orchestrator...")
-    result = orchestrator.invoke(state)
-    messages = result.get("messages", [])
-    last_msg = messages[-1] if messages else None
-    if last_msg is not None:
-        content = getattr(last_msg, "content", str(last_msg))
-        click.echo(f"\nResult:\n{content}")
-    task_runs = result.get("task_runs", [])
-    if task_runs:
-        click.echo(f"\nTask runs: {len(task_runs)}")
-        for run in task_runs:
-            click.echo(f"  {run['subagent_type']}: {run['status']} ({run.get('duration_ms', '?')}ms)")
+    config = {"configurable": {"thread_id": thread_id}}
+
+    click.echo("Invoking pipeline...")
+    try:
+        result = pipeline.invoke(state, config)
+        click.echo("\nPipeline completed.")
+        click.echo(f"Domain model: {'yes' if result.get('domain_model') else 'no'}")
+        click.echo(f"API spec: {'yes' if result.get('api_spec') else 'no'}")
+        click.echo(f"Test files: {len(result.get('test_files', []))}")
+        click.echo(f"Modified files: {len(result.get('modified_files', []))}")
+        click.echo(f"Review report: {'yes' if result.get('review_report') else 'no'}")
+    except Exception as e:
+        click.echo(f"\nPipeline interrupted: {e}")
+        click.echo(f"Resume with: uni-dev resume {thread_id}")
+
+
+@cli.command()
+@click.argument("thread_id")
+@click.option(
+    "--decision",
+    type=click.Choice(["approve", "reject", "retry"]),
+    prompt="Decision",
+    help="Human decision for the interrupted pipeline.",
+)
+def resume(thread_id: str, decision: str) -> None:
+    """Resume a paused pipeline from checkpoint."""
+    from uni_dev.core.graph import compile_pipeline
+
+    checkpointer = _get_checkpointer()
+    pipeline = compile_pipeline(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": thread_id}}
+
+    click.echo(f"Resuming pipeline {thread_id} with decision: {decision}")
+    try:
+        result = pipeline.invoke(
+            {"_human_decision": decision},
+            config,
+        )
+        click.echo("\nPipeline resumed and completed.")
+        click.echo(f"Review report: {'yes' if result.get('review_report') else 'no'}")
+    except Exception as e:
+        click.echo(f"\nPipeline interrupted again: {e}")
+        click.echo(f"Resume with: uni-dev resume {thread_id}")
 
 
 @cli.command()
@@ -116,7 +161,7 @@ def status(db: str) -> None:
 
 
 @cli.command()
-@click.option("--poll-interval", '-i', default=5, type=int, help="Seconds between polls (default: 5).")
+@click.option("--poll-interval", '-i', default=5, type=int, help="Seconds between poll (default: 5).")
 @click.option("--no-tui", is_flag=True, default=False, help="Run headless (no dashboard).")
 @click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
 @click.option("--monitor-db", default=".uni-kb/monitor.db", help="MonitorStore database path.")
@@ -142,51 +187,6 @@ def watch(poll_interval: int, no_tui: bool, db: str, monitor_db: str) -> None:
         app = UniDevApp(db, poll_interval)
         app._runner = runner
         app.run()
-
-
-@cli.command()
-@click.argument("issue_id")
-@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
-def approve(issue_id: str, db: str) -> None:
-    """Approve a needs_human issue."""
-    from uni_dev.store.issue_store import IssueStore
-    store = IssueStore(db)
-    issue = store.get_issue(issue_id)
-    if issue is None:
-        click.echo(f"Issue {issue_id} not found.", err=True)
-        sys.exit(1)
-    store.update_status(issue_id, "completed")
-    click.echo(f"Issue {issue_id} approved and marked completed.")
-
-
-@cli.command()
-@click.argument("issue_id")
-@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
-def reject(issue_id: str, db: str) -> None:
-    """Reject a needs_human issue."""
-    from uni_dev.store.issue_store import IssueStore
-    store = IssueStore(db)
-    issue = store.get_issue(issue_id)
-    if issue is None:
-        click.echo(f"Issue {issue_id} not found.", err=True)
-        sys.exit(1)
-    store.update_status(issue_id, "failed", error="Rejected by human")
-    click.echo(f"Issue {issue_id} rejected.")
-
-
-@cli.command()
-@click.argument("issue_id")
-@click.option("--db", default=".uni-kb/issues.db", help="IssueStore database path.")
-def retry(issue_id: str, db: str) -> None:
-    """Retry a needs_human or failed issue."""
-    from uni_dev.store.issue_store import IssueStore
-    store = IssueStore(db)
-    issue = store.get_issue(issue_id)
-    if issue is None:
-        click.echo(f"Issue {issue_id} not found.", err=True)
-        sys.exit(1)
-    store.update_status(issue_id, "pending")
-    click.echo(f"Issue {issue_id} queued for retry.")
 
 
 if __name__ == "__main__":
