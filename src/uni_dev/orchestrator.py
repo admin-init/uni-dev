@@ -16,6 +16,7 @@ from deepagents.graph import SubAgent
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
 
+from uni_dev.core.factory import DEFAULT_MONITOR_DB
 from uni_dev.agents.code_generator import create_code_generator
 from uni_dev.agents.domain_designer import create_domain_designer
 from uni_dev.agents.reviewer import create_reviewer
@@ -224,7 +225,7 @@ def create_orchestrator(
     config_path: Path | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
-    monitor_db_path: str | None = ".uni-kb/monitor.db",
+    monitor_db_path: str | None = DEFAULT_MONITOR_DB,
 ) -> CompiledStateGraph:
     """Create the main uni-dev orchestrator agent.
 

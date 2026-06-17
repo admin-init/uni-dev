@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from langchain.agents.middleware.types import (
@@ -11,9 +10,6 @@ from langchain.agents.middleware.types import (
 from langgraph.prebuilt.tool_node import ToolCallWrapper
 
 from uni_dev.security.log_filter import LogFilter
-
-logger = logging.getLogger(__name__)
-
 
 class SecurityFilterMiddleware(AgentMiddleware[AgentState, Any, Any]):
     """Middleware that redacts PII/secrets from tool call args and results."""

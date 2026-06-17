@@ -21,6 +21,7 @@ from textual.widgets import (
 )
 from textual.binding import Binding
 
+from uni_dev.core.factory import DEFAULT_ISSUES_DB
 from uni_dev.runner import IssueRunner
 from uni_dev.store.issue_store import IssueStore
 from uni_dev.tui.chat import ChatModal
@@ -49,7 +50,7 @@ class UniDevApp(App):
 
     def __init__(
         self,
-        issue_db_path: str = ".uni-kb/issues.db",
+        issue_db_path: str = DEFAULT_ISSUES_DB,
         poll_interval: int = 5,
     ) -> None:
         super().__init__()

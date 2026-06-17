@@ -6,7 +6,6 @@ sequences in model responses.
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any
 
@@ -15,9 +14,6 @@ from langchain.agents.middleware.types import (
     AgentState,
     ModelRequest,
 )
-
-logger = logging.getLogger(__name__)
-
 
 class OutputCleanerMiddleware(AgentMiddleware[AgentState, Any, Any]):
     """Cleans LLM output format: removes markdown markers, fixes JSON escapes."""

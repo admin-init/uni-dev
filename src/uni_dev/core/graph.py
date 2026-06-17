@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -23,9 +22,6 @@ from uni_dev.core.nodes.run_tests import make_run_tests_node
 from uni_dev.core.nodes.spec_write import make_spec_write_node
 from uni_dev.core.nodes.test_generate import make_test_generate_node
 from uni_dev.core.state import PipelineState
-
-logger = logging.getLogger(__name__)
-
 
 def compile_pipeline(
     config: PipelineConfig,

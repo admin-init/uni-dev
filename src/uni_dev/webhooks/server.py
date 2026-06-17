@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, status as http_status
 from fastapi.responses import JSONResponse
 
+from uni_dev.core.factory import DEFAULT_ISSUES_DB
 from uni_dev.webhooks.codeberg_handler import (
     validate_signature as validate_codeberg_signature,
     handle_event as handle_codeberg_event,
@@ -73,7 +74,7 @@ def create_app() -> FastAPI:
         if result.get("status") == "accepted":
             issue_data = result.get("issue", {})
             from uni_dev.store.issue_store import IssueStore
-            store = IssueStore(".uni-kb/issues.db")
+            store = IssueStore(DEFAULT_ISSUES_DB)
             issue_id = store.insert_issue({
                 "title": issue_data.get("title", ""),
                 "body": issue_data.get("body", ""),
@@ -117,7 +118,7 @@ def create_app() -> FastAPI:
         if result.get("status") == "accepted":
             issue_data = result.get("issue", {})
             from uni_dev.store.issue_store import IssueStore
-            store = IssueStore(".uni-kb/issues.db")
+            store = IssueStore(DEFAULT_ISSUES_DB)
             issue_id = store.insert_issue({
                 "title": issue_data.get("title", ""),
                 "body": issue_data.get("body", ""),

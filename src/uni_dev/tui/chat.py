@@ -133,9 +133,13 @@ class ChatModal(ModalScreen[dict[str, Any] | None]):
 
         from langchain_openai import ChatOpenAI
 
+        from uni_dev.core.factory import PipelineConfig
+
+        config = PipelineConfig.from_env()
+
         model = ChatOpenAI(
-            model="deepseek-v4-flash",
-            base_url="https://api.deepseek.com",
+            model=config.model or "deepseek-v4-flash",
+            base_url=config.base_url,
             api_key=api_key,
             temperature=0.7,
         )

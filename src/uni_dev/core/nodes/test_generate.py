@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage
-
-logger = logging.getLogger(__name__)
-
 
 def make_test_generate_node(
     config: Any,
