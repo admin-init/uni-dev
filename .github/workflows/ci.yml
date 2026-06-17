@@ -27,4 +27,4 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv pip install -e ".[dev]"
         timeout-minutes: 10
-      - run: uv run --no-sync pytest -v
+      - run: uv run pytest -v
