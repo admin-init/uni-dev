@@ -1,0 +1,445 @@
+# e2e_testing.yaml — Integration, Acceptance & E2E Test Plan
+# uni-dev + uni-kb
+#
+# Layers:
+#   Layer 0: Test Infrastructure (prerequisite for all)
+#   Layer 1: Integration Tests (component boundaries)
+#   Layer 2: Acceptance Tests (full pipeline with mock LLM)
+#   Layer 3: E2E Tests (real LLM, optional/manual)
+
+metadata:
+  created: "2026-06-20"
+  status: planned
+  total_estimated_effort: "~7.5h"
+  total_target_tests: "~60"
+
+current_state:
+  unit_tests: 353 # 166 uni-dev + 187 uni-kb
+  integration_tests: 6 # generators, chroma, webhooks — light integration only
+  acceptance_tests: 0
+  e2e_tests: 0
+  pytest_markers: 0
+  mock_llm_fixtures: 0
+  pipeline_invocation_tests: 0 # compile_pipeline().invoke() never called in tests
+
+# ── Phase 0: Test Infrastructure ──
+phase_0_infrastructure:
+  goal: "Set up scaffolding that all subsequent test layers depend on."
+  estimated_effort: "~1h"
+  repo: uni-dev
+
+  tasks:
+    - id: P0.1
+      title: "Define pytest markers"
+      files:
+        - "pyproject.toml"
+      detail: |
+        Add markers to [tool.pytest.ini_options]:
+        markers = [
+          "integration: integration tests (component boundaries, 2-3 components)",
+          "acceptance: acceptance tests (full pipeline with mock LLM)",
+          "e2e: end-to-end tests (real LLM, requires API key)",
+          "slow: tests that take >5s (e2e, chroma, large parsing)",
+        ]
+
+    - id: P0.2
+      title: "Create test directories"
+      files:
+        - "tests/integration/"
+        - "tests/acceptance/"
+        - "tests/e2e/"
+      detail: |
+        Separate directories for test categorization.
+        Create __init__.py in each (empty, for pytest collection).
+
+    - id: P0.3
+      title: "Create FakeChatModel mock LLM fixture"
+      files:
+        - "tests/conftest.py"
+      detail: |
+        Extend SimpleChatModel to return deterministic responses based on prompt content:
+        - Domain-related prompts → valid domain YAML (entities: [Pet, Owner], bounded_contexts: [clinic])
+        - Spec-related prompts → valid OpenAPI 3.0 YAML (openapi: '3.0', info, paths)
+        - Test-related prompts → "def test_pet(): assert True"
+        - Code-related prompts → "# implementation placeholder"
+        - Review-related prompts → '{"status": "pass", "gaps": [], "security": "clean"}'
+        - Default → "ack"
+
+        This avoids all LLM API calls while exercising the full graph topology.
+
+    - id: P0.4
+      title: "Create pipeline test harness fixture"
+      files:
+        - "tests/conftest.py"
+      detail: |
+        @pytest.fixture
+        def pipeline_config():
+            return PipelineConfig(api_key="fake-key", base_url="https://fake.api")
+
+        @pytest.fixture
+        def compiled_pipeline(pipeline_config):
+            from uni_dev.core.graph import compile_pipeline
+            return compile_pipeline(config=pipeline_config)
+
+        @pytest.fixture
+        def base_state():
+            return {
+                "issue": "Add pet owner avatar upload endpoint",
+                "project_path": ".",
+                "classification": "add_feature",
+                "attempt_count": 0,
+            }
+
+        @pytest.fixture
+        def state_after_ddd(base_state):
+            s = dict(base_state)
+            s["domain_model"] = "entities:\n  - Pet\n  - Owner\nbounded_contexts:\n  - clinic"
+            return s
+
+        @pytest.fixture
+        def state_after_sdd(state_after_ddd):
+            s = dict(state_after_ddd)
+            s["api_spec"] = "openapi: '3.0'\ninfo:\n  title: PetClinic\n  version: '1.0'\npaths:\n  /pets:\n    get:\n      responses:\n        '200':\n          description: OK"
+            return s
+
+    - id: P0.5
+      title: "Create state assertion helpers"
+      files:
+        - "tests/conftest.py"
+      detail: |
+        def assert_gate_passed(state: dict) -> None:
+            assert state.get("_gate_result") == "pass"
+
+        def assert_gate_failed(state: dict) -> None:
+            assert state.get("_gate_result") == "fail"
+
+        def assert_has_domain_model(state: dict) -> None:
+            assert state.get("domain_model", ""), "Expected domain_model in state"
+
+        def assert_has_api_spec(state: dict) -> None:
+            assert state.get("api_spec", ""), "Expected api_spec in state"
+
+        def assert_test_passed(state: dict) -> None:
+            results = state.get("test_results", {})
+            assert results.get("pass") is True
+            assert not results.get("failures", [])
+
+        def assert_retry_attempt(state: dict, expected: int) -> None:
+            assert state.get("attempt_count") == expected
+
+    - id: P0.6
+      title: "Configure CI test separation"
+      files:
+        - ".github/workflows/ci.yml"
+      detail: |
+        Split test job into:
+        - test-unit: uv run pytest -v -m "not integration and not acceptance and not e2e and not slow"
+        - test-integration: uv run pytest -v -m "integration or acceptance"
+        - E2E tests NOT in CI (requires API key)
+
+    - id: P0.7
+      title: "Sample project fixture"
+      files:
+        - "tests/conftest.py"
+      detail: |
+        @pytest.fixture
+        def petclinic_path():
+            p = Path(__file__).resolve().parent.parent.parent / "tests" / "spring-petclinic-rest"
+            if not p.exists():
+                pytest.skip("spring-petclinic-rest fixture not found")
+            return str(p)
+
+# ── Phase 1: Integration Tests ──
+phase_1_integration:
+  goal: "Validate data flows correctly across component boundaries. No mock LLM needed."
+  estimated_effort: "~2h"
+  repo: uni-dev # except I5, I6 which are uni-kb
+  directory: "tests/integration/"
+
+  tests:
+    - id: I1
+      file: "test_graph_routing.py"
+      description: "Validate conditional edges route correctly through the SOP graph"
+      scenarios:
+        - "ddd_gate pass → routes to spec_write"
+        - "ddd_gate fail → routes to human_approval"
+        - "sdd_gate pass → routes to test_generate"
+        - "sdd_gate fail → routes to human_approval"
+        - "test_judge pass → routes to review"
+        - "test_judge fail → routes to retry_ctrl"
+        - "retry_ctrl retry → routes to code_generate"
+        - "retry_ctrl escalate → routes to human_approval"
+        - "human_approval approve → routes to code_generate"
+        - "human_approval reject → routes to END"
+      components: [graph.py, gates.py, hitl.py]
+      estimated_tests: 10
+
+    - id: I2
+      file: "test_checkpoint_resume.py"
+      description: "SqliteSaver persists state at interrupt; resume continues from same node"
+      scenarios:
+        - "Pipeline interrupted at ddd_gate fail → state saved → resume → continues from ddd_gate"
+        - "Pipeline interrupted at sdd_gate fail → state saved → resume with approval → continues"
+        - "Pipeline interrupted at retry exhaustion → state saved → resume with reject → END"
+      components: [graph.py, hitl.py, langgraph checkpoint]
+      estimated_tests: 3
+
+    - id: I3
+      file: "test_retry_loop.py"
+      description: "Test retry loop: fail → retry → code_generate → run_tests cycle"
+      scenarios:
+        - "test_judge fail → retry_ctrl increments attempt_count → routes to code_generate"
+        - "Attempt 1, 2, 3: retry_ctrl returns retry"
+        - "Attempt 4 (exhaustion): retry_ctrl returns escalate → routes to human_approval"
+        - "Code generate receives retry context with failure details"
+      components: [graph.py, gates.py, nodes/run_tests.py, nodes/code_generate.py]
+      estimated_tests: 5
+
+    - id: I4
+      file: "test_state_flow.py"
+      description: "State fields propagate correctly between nodes"
+      scenarios:
+        - "classify_node sets classification field"
+        - "domain_design_node reads issue from state → sets domain_model"
+        - "spec_write_node reads domain_model from state → sets api_spec"
+        - "test_generate_node reads api_spec from state → sets test_files"
+        - "code_generate_node reads test_files and api_spec → sets modified_files"
+        - "run_tests_node reads project_path → sets test_results"
+        - "review_node reads all accumulated state → sets review_report"
+      components: [all core/nodes/*.py, core/state.py]
+      estimated_tests: 7
+
+    - id: I5
+      file: "test_parser_to_store.py"
+      repo: uni-kb
+      description: "Parse real Java source → ingest into SQLiteStore → query back"
+      scenarios:
+        - "Parse Java controller string → ingest → query endpoint count"
+        - "Parse Java entity string → ingest → query entity with columns"
+        - "Parse Java service string → ingest → query method with params"
+        - "Parse multiple files → ingest → verify dedup (idempotent ingest)"
+      components: [parsers/java/*.py, store/sqlite_store.py]
+      estimated_tests: 4
+
+    - id: I6
+      file: "test_store_to_generator.py"
+      repo: uni-kb
+      description: "SQLiteStore with ingested data → generate specs → validate output"
+      scenarios:
+        - "API endpoints in store → generate_api_contract → validate YAML structure"
+        - "Entities in store → generate_data_model → validate field mappings"
+        - "Auth permissions in store → generate_auth_matrix → validate endpoint/role pairs"
+        - "Classes in store → generate_business_logic → validate method signatures"
+      components: [store/sqlite_store.py, generators/*.py]
+      estimated_tests: 4
+
+    - id: I7
+      file: "test_webhook_to_issue_store.py"
+      description: "POST to webhook → issue extracted → stored in IssueStore"
+      scenarios:
+        - "GitHub webhook with issue opened → extract_issue → insert_issue → verify status=pending"
+        - "Codeberg webhook with issue opened → extract_issue → insert_issue → verify status"
+        - "Webhook with invalid signature → 401 → issue NOT stored"
+        - "Webhook with PR event (not issue) → skipped → not stored"
+      components: [webhooks/server.py, webhooks/github_handler.py, webhooks/codeberg_handler.py, store/issue_store.py]
+      estimated_tests: 4
+
+    - id: I8
+      file: "test_middleware_chain.py"
+      description: "OutputCleaner → CostTracking → SecurityFilter fire in sequence"
+      scenarios:
+        - "Output with markdown ``` markers → OutputCleaner strips markers"
+        - "Output with token_usage metadata → CostTracking accumulates tokens"
+        - "Output with API key → SecurityFilter redacts key"
+        - "All 3 middleware fire in correct order on a single model call"
+      components: [middleware/output_cleaner.py, middleware/cost_tracking.py, security/security_filter.py]
+      estimated_tests: 4
+
+# ── Phase 2: Acceptance Tests ──
+phase_2_acceptance:
+  goal: "Validate the full pipeline satisfies business requirements using mock LLM."
+  estimated_effort: "~3h"
+  repo: uni-dev
+  directory: "tests/acceptance/"
+  requires: [phase_0_infrastructure, phase_1_integration]
+
+  tests:
+    - id: A1
+      file: "test_happy_path.py"
+      description: "Full pipeline happy path: no gate failures, no retries, review completes"
+      scenarios:
+        - "Pipeline invoked with base_state → classify → domain_design (mock) → ddd_gate pass → spec_write (mock) → sdd_gate pass → test_generate (mock) → code_generate (mock) → run_tests (pass) → test_judge pass → review (mock) → END"
+        - "Final state contains: domain_model, api_spec, test_files, modified_files, review_report"
+        - "Gate results are all pass"
+        - "attempt_count is 0 (no retries needed)"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A2
+      file: "test_ddd_gate_fail_then_approve.py"
+      description: "DDD gate fails (empty domain) → HITL interrupt → human approves → retry domain_design → complete"
+      scenarios:
+        - "State with empty domain_model → ddd_gate returns fail → interrupt triggered"
+        - "Resume with _human_decision=approve → pipeline continues from ddd_gate → spec_write → ... → END"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A3
+      file: "test_ddd_gate_fail_then_reject.py"
+      description: "DDD gate fails → HITL interrupt → human rejects → pipeline ends"
+      scenarios:
+        - "State with empty domain_model → ddd_gate fail → interrupt"
+        - "Resume with _human_decision=reject → pipeline routes to END"
+        - "Final state has no review_report (pipeline terminated early)"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A4
+      file: "test_sdd_gate_fail_then_approve.py"
+      description: "SDD gate fails (empty spec) → HITL → approve → retry spec_write → complete"
+      scenarios:
+        - "State with domain_model but empty api_spec → sdd_gate fail → interrupt"
+        - "Resume with approve → continues → END with review_report"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A5
+      file: "test_retry_then_pass.py"
+      description: "Tests fail on first run → retry → code fixed → tests pass → complete"
+      scenarios:
+        - "State with test_results.pass=False → test_judge fail → retry_ctrl → code_generate → run_tests now passes → test_judge pass → review → END"
+        - "attempt_count increments from 0 to 1 on retry"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A6
+      file: "test_retry_exhaustion.py"
+      description: "Tests fail 3 times → retry_ctrl escalates → HITL"
+      scenarios:
+        - "State with attempt_count=2, test_results.pass=False → retry_ctrl returns retry (count=3)"
+        - "Next iteration: attempt_count=3, test_results still failing → retry_ctrl returns escalate"
+        - "Escalate → routes to human_approval"
+      mock_llm: true
+      estimated_tests: 2
+
+    - id: A7
+      file: "test_blocked_agent.py"
+      description: "Sub-agent returns BLOCKED → gate detects blockers → fails → HITL"
+      scenarios:
+        - "Domain designer returns with blockers=[{reason: 'Cannot determine bounded contexts'}] → ddd_gate sees blockers → fail"
+        - "Spec writer returns with blockers → sdd_gate sees blockers → fail"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A8
+      file: "test_state_accumulation.py"
+      description: "After full pipeline run, state has all accumulated fields"
+      scenarios:
+        - "Run full happy path → verify state.domain_model is populated"
+        - "Verify state.api_spec is populated"
+        - "Verify state.test_files is non-empty list"
+        - "Verify state.modified_files is non-empty list"
+        - "Verify state.review_report is non-empty string"
+        - "Verify state.test_results.pass is True"
+      mock_llm: true
+      estimated_tests: 1
+
+    - id: A9
+      file: "test_petclinic_parsing.py"
+      description: "Run uni-kb init on real Spring PetClinic project → verify stores populated"
+      scenarios:
+        - "Parse spring-petclinic-rest → verify SQLiteStore has controllers > 0"
+        - "Verify SQLiteStore has services > 0"
+        - "Verify SQLiteStore has entities > 0 (Pet, Owner, Vet, etc.)"
+        - "Verify API endpoints extracted (PetController, OwnerController, etc.)"
+        - "Verify auth permissions extracted (hasRole, isAuthenticated)"
+        - "Verify ChromaDB collections are populated"
+        - "Verify CodeGraph has nodes and edges"
+      repo: uni-kb
+      slow: true
+      estimated_tests: 5
+
+    - id: A10
+      file: "test_cli_integration.py"
+      description: "CLI commands drive full workflows with mocked dependencies"
+      scenarios:
+        - "cli run 'Add pet endpoint' --classify add_feature → pipeline invokes → outputs completion summary"
+        - "cli run 'Add pet endpoint' --test-cmd 'mvn test' → resolve_test_command called → mvn test used"
+        - "cli resume thread-123 --decision approve → pipeline resumes → completes"
+        - "cli resume thread-123 --decision reject → pipeline terminates"
+        - "cli status --db test.db → outputs status dashboard with summary data"
+        - "cli listen --port 0 → webhook server starts → health endpoint responds"
+        - "cli init . → delegates to uni-kb init → returns success"
+      estimated_tests: 7
+
+# ── Phase 3: E2E Tests ──
+phase_3_e2e:
+  goal: "Validate with real LLM API calls. Slow, expensive, run manually or on nightly schedule."
+  estimated_effort: "~1.5h"
+  repo: uni-dev
+  directory: "tests/e2e/"
+  requires: [phase_2_acceptance]
+  triggers: ["@pytest.mark.e2e", "DEEPSEEK_API_KEY env var set"]
+
+  tests:
+    - id: E1
+      file: "test_real_pipeline.py"
+      description: "Full pipeline with real DeepSeek API"
+      scenarios:
+        - "Run full pipeline with real API → verify domain_model is valid YAML"
+        - "Verify api_spec is valid OpenAPI YAML"
+        - "Verify test_files are valid Python test files"
+        - "Verify modified_files contains implementation code"
+        - "Verify review_report contains structured feedback"
+      marker: "e2e and slow"
+      estimated_tests: 1
+
+    - id: E2
+      file: "test_real_petclinic.py"
+      description: "Parse PetClinic → run pipeline on real issue"
+      scenarios:
+        - "uni-kb init on spring-petclinic-rest → verify parsing"
+        - "uni-dev run 'Add health check endpoint' on petclinic → verify pipeline completes"
+        - "Verify generated code integrates with existing project structure"
+      marker: "e2e and slow"
+      estimated_tests: 2
+
+    - id: E3
+      file: "test_real_webhook_lifecycle.py"
+      description: "Webhook → IssueStore → Runner → Pipeline → Completion"
+      scenarios:
+        - "POST GitHub webhook → issue stored → runner picks up → pipeline runs → issue marked completed"
+        - "Payload signature validation with real WEBHOOK_SECRET"
+      marker: "e2e and slow"
+      estimated_tests: 2
+
+# ── CI Configuration ──
+ci_configuration:
+  unit:
+    command: "uv run pytest -v -m 'not integration and not acceptance and not e2e and not slow'"
+    runs: "on every push and PR"
+  integration:
+    command: "uv run pytest -v -m 'integration or acceptance'"
+    runs: "on every push and PR (separate job)"
+  e2e:
+    command: "uv run pytest -v -m 'e2e'"
+    runs: "manual trigger only (workflow_dispatch) OR nightly cron"
+
+# ── Execution Order ──
+execution_order:
+  - phase: 0
+    name: "Test Infrastructure"
+    prerequisite: null
+    deliverable: "Fixtures, markers, CI config"
+  - phase: 1
+    name: "Integration Tests"
+    prerequisite: Phase 0
+    deliverable: "~41 tests, 8 files"
+  - phase: 2
+    name: "Acceptance Tests"
+    prerequisite: Phase 0 + Phase 1
+    deliverable: "~20 tests, 9 files"
+  - phase: 3
+    name: "E2E Tests"
+    prerequisite: Phase 2
+    deliverable: "~5 tests, 3 files"

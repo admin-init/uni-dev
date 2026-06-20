@@ -43,3 +43,9 @@ allow-direct-references = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: integration tests (component boundaries, 2-3 components)",
+    "acceptance: acceptance tests (full pipeline with mock LLM)",
+    "e2e: end-to-end tests (real LLM, requires API key)",
+    "slow: tests that take >5s (e2e, chromaDB, large parsing)",
+]
